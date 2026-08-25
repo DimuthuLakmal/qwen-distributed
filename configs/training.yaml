@@ -1,0 +1,66 @@
+fsdp:
+  enabled: true
+  reshard_after_forward: true
+  shard_language_layers: true
+  shard_vision_blocks: true
+  mixed_precision: true
+  param_dtype: "bfloat16"
+  reduce_dtype: "float32"
+  output_dtype: null
+  cpu_offload: false
+  cpu_offload_pin_memory: true
+
+training:
+  num_epochs: 3
+
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+
+  gradient_accumulation_steps: 4
+
+  max_grad_norm: 1.0
+
+  scheduler_type: cosine
+
+  warmup_ratio: 0.03
+  warmup_steps: null
+
+  log_every_steps: 10
+
+checkpoint:
+  enabled: true
+  directory: "./results/checkpoints"
+
+  # Optimizer steps, NOT microbatches.
+  save_every_steps: 500
+  save_at_epoch_end: true
+  keep_last_n: 1
+
+  # null    -> start from pretrained model
+  # latest  -> automatically resume latest checkpoint
+  # /path   -> resume a specific checkpoint
+  resume_from: null
+
+tracking:
+  enabled: false
+
+  # MLflow tracks configs and training metrics (loss, lr, tokens/s).
+  # Defaults to a local file store under <checkpoint.directory>/mlruns if unset.
+  # Credentials (MLFLOW_TRACKING_USERNAME / MLFLOW_TRACKING_PASSWORD) are
+  # expected to already be set in the environment -- never hardcode them here.
+  mlflow_tracking_uri: null
+  mlflow_experiment_name: "qwen-vl-sft"
+  mlflow_run_name: null
+
+  # GPU utilization is an infra/perf metric rather than an experiment result,
+  # so it's written to S3 as CSV instead (for Grafana), rather than to MLflow.
+  # AWS credentials are read from the environment (AWS_ACCESS_KEY_ID /
+  # AWS_SECRET_ACCESS_KEY / AWS_DEFAULT_REGION) -- never hardcode them here.
+  log_perf_metrics: false
+  s3_bucket: null
+  s3_prefix: "metrics"
+  metrics_log_interval: 50

@@ -1,0 +1,18 @@
+model:
+  model_id: "Qwen/Qwen3-VL-8B-Instruct"
+  cache_dir: "/data/gpfs/projects/punim2030/huggingface/cache"        # point at scratch/gpfs, not $HOME (quota)
+  dtype: "bfloat16"
+  attn_implementation: "flash_attention_2"
+  freeze_vision_tower: true
+  gradient_checkpointing: true
+  min_pixels: 200704
+  max_pixels: 802816
+  freeze_vision: false
+  freeze_language_model: true
+  freeze_vision_merger: false
+
+export:
+  enabled: true
+  output_dir: "results/final"
+  dtype: "bfloat16"
+  max_shard_size: "5GB"

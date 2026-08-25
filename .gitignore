@@ -1,0 +1,7 @@
+data
+results
+.vscode
+logs
+__pycache__/
+*.py[cod]
+*$py.class
