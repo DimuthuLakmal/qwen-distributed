@@ -14,6 +14,10 @@ from src.config.schema import (
     TrackingConfig,
     EvalConfig,
     ProfilerConfig,
+    InferenceServiceConfig,
+    InferenceModelConfig,
+    GenerationDefaultsConfig,
+    InferenceLimitsConfig,
 )
 
 _TORCH_DTYPES = {
@@ -24,19 +28,31 @@ _TORCH_DTYPES = {
 
 
 class ConfigurationManager:
-    def __init__(self, data_config_path: Path,
-                 model_config_path: Path,
-                 training_config_path: Path,
-                 tracking_config_path: Path,
-                 eval_config_path: Path | None = None):
-        self.data_config = read_yaml(data_config_path)
-        self.model_config = read_yaml(model_config_path)
-        self.training_config = read_yaml(training_config_path)
-        self.tracking_config = read_yaml(tracking_config_path)
+    def __init__(self, data_config_path: Path | None = None,
+                 model_config_path: Path | None = None,
+                 training_config_path: Path | None = None,
+                 tracking_config_path: Path | None = None,
+                 eval_config_path: Path | None = None,
+                 inference_config_path: Path | None = None):
+        self.data_config = read_yaml(data_config_path) if data_config_path else None
+        self.model_config = read_yaml(model_config_path) if model_config_path else None
+        self.training_config = read_yaml(training_config_path) if training_config_path else None
+        self.tracking_config = read_yaml(tracking_config_path) if tracking_config_path else None
         self.eval_config = read_yaml(eval_config_path) if eval_config_path else None
+        self.inference_config = read_yaml(inference_config_path) if inference_config_path else None
+
+    @staticmethod
+    def _require(config_box, config_name: str):
+        if config_box is None:
+            raise RuntimeError(
+                f"{config_name} was not loaded. Pass a path for it to "
+                "ConfigurationManager before calling this getter."
+            )
+
+        return config_box
 
     def get_data_config(self) -> DataConfig:
-        config = self.data_config.dataset
+        config = self._require(self.data_config, "data_config_path").dataset
 
         create_directories([d for d in (config.cache_dir, config.image_root) if d])
 
@@ -52,7 +68,7 @@ class ConfigurationManager:
         return data_config
 
     def get_dataloader_config(self) -> DataLoaderConfig:
-        config = self.data_config.dataloader
+        config = self._require(self.data_config, "data_config_path").dataloader
 
         dataloader_config = DataLoaderConfig(
             batch_size=config.batch_size,
@@ -65,7 +81,7 @@ class ConfigurationManager:
         return dataloader_config
 
     def get_model_config(self) -> ModelConfig:
-        config = self.model_config.model
+        config = self._require(self.model_config, "model_config_path").model
 
         create_directories([config.cache_dir] if config.cache_dir else [])
 
@@ -86,7 +102,7 @@ class ConfigurationManager:
         return model_config
 
     def get_fsdp_config(self) -> FSDPConfig:
-        config = self.training_config.fsdp
+        config = self._require(self.training_config, "training_config_path").fsdp
 
         fsdp_config = FSDPConfig(
             enabled=config.enabled,
@@ -105,7 +121,7 @@ class ConfigurationManager:
 
 
     def get_training_config(self) -> TrainingConfig:
-        config = self.training_config.training
+        config = self._require(self.training_config, "training_config_path").training
 
         training_config = TrainingConfig(
             num_epochs=config.num_epochs,
@@ -125,7 +141,7 @@ class ConfigurationManager:
         return training_config
 
     def get_checkpoint_config(self) -> CheckpointConfig:
-        config = self.training_config.checkpoint
+        config = self._require(self.training_config, "training_config_path").checkpoint
 
         if config.enabled:
             create_directories([config.directory])
@@ -143,7 +159,7 @@ class ConfigurationManager:
 
 
     def get_export_config(self) -> ExportConfig:
-        config = self.model_config.export
+        config = self._require(self.model_config, "model_config_path").export
 
         if config.enabled:
             create_directories([config.output_dir])
@@ -158,7 +174,7 @@ class ConfigurationManager:
         return export_config
 
     def get_eval_data_config(self) -> DataConfig:
-        config = self.eval_config.dataset
+        config = self._require(self.eval_config, "eval_config_path").dataset
 
         create_directories([d for d in (config.cache_dir, config.image_root) if d])
 
@@ -172,7 +188,7 @@ class ConfigurationManager:
         )
 
     def get_eval_dataloader_config(self) -> DataLoaderConfig:
-        config = self.eval_config.dataloader
+        config = self._require(self.eval_config, "eval_config_path").dataloader
 
         return DataLoaderConfig(
             batch_size=config.batch_size,
@@ -183,7 +199,7 @@ class ConfigurationManager:
         )
 
     def get_eval_config(self) -> EvalConfig:
-        config = self.eval_config.evaluation
+        config = self._require(self.eval_config, "eval_config_path").evaluation
 
         create_directories([config.output_dir] if config.output_dir else [])
 
@@ -204,7 +220,7 @@ class ConfigurationManager:
         )
 
     def get_tracking_config(self) -> TrackingConfig:
-        config = self.tracking_config.tracking
+        config = self._require(self.tracking_config, "tracking_config_path").tracking
 
         tracking_config = TrackingConfig(
             enabled=config.enabled,
@@ -220,7 +236,7 @@ class ConfigurationManager:
         return tracking_config
 
     def get_profiler_config(self) -> ProfilerConfig:
-        config = self.tracking_config.profiler
+        config = self._require(self.tracking_config, "tracking_config_path").profiler
 
         if config.enabled:
             create_directories([config.output_dir])
@@ -239,3 +255,53 @@ class ConfigurationManager:
         )
 
         return profiler_config
+
+    def get_inference_service_config(self) -> InferenceServiceConfig:
+        config = self._require(self.inference_config, "inference_config_path").service
+
+        return InferenceServiceConfig(
+            host=config.host,
+            port=config.port,
+            model_version=config.model_version,
+        )
+
+    def get_inference_model_config(self) -> InferenceModelConfig:
+        config = self._require(self.inference_config, "inference_config_path").model
+
+        return InferenceModelConfig(
+            model_path=config.model_path,
+            device=config.device,
+            dtype=_TORCH_DTYPES[config.dtype],
+            attn_implementation=config.attn_implementation,
+            min_pixels=config.min_pixels,
+            max_pixels=config.max_pixels,
+        )
+
+    def get_generation_defaults_config(self) -> GenerationDefaultsConfig:
+        inference_config = self._require(self.inference_config, "inference_config_path")
+        config = inference_config.generation
+        limits = inference_config.limits
+
+        if config.max_new_tokens > limits.max_new_tokens:
+            raise ValueError(
+                f"generation.max_new_tokens ({config.max_new_tokens}) must not "
+                f"exceed limits.max_new_tokens ({limits.max_new_tokens})."
+            )
+
+        return GenerationDefaultsConfig(
+            do_sample=config.do_sample,
+            max_new_tokens=config.max_new_tokens,
+            num_beams=config.num_beams,
+            temperature=config.temperature,
+        )
+
+    def get_inference_limits_config(self) -> InferenceLimitsConfig:
+        config = self._require(self.inference_config, "inference_config_path").limits
+
+        return InferenceLimitsConfig(
+            max_prompt_chars=config.max_prompt_chars,
+            max_images=config.max_images,
+            max_image_bytes=config.max_image_bytes,
+            max_image_pixels=config.max_image_pixels,
+            max_new_tokens=config.max_new_tokens,
+        )

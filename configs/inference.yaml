@@ -1,0 +1,29 @@
+service:
+  host: "0.0.0.0"
+  port: 8000
+  model_version: "qwen-vl-sft-v1"
+
+model:
+  # Exported Hugging Face artifact directory (see model.yaml's export.output_dir),
+  # not a training-format Distributed Checkpoint (DCP) directory.
+  model_path: "results/final"
+  device: "cuda"
+  dtype: "bfloat16"
+  attn_implementation: "flash_attention_2"
+  min_pixels: 200704
+  max_pixels: 802816
+
+generation:
+  do_sample: false
+  max_new_tokens: 128
+  num_beams: 1
+  temperature: 1.0
+
+limits:
+  max_prompt_chars: 4000
+  max_images: 4
+  max_image_bytes: 8000000
+  max_image_pixels: 20000000
+  # Hard ceiling. Request-level max_new_tokens is clamped to this and can
+  # never exceed it.
+  max_new_tokens: 512

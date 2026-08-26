@@ -157,3 +157,37 @@ class ProfilerConfig:
     # tracing all of them just multiplies multi-GB trace files. None means
     # trace every rank.
     profile_ranks: list[int] | None = None
+
+
+@dataclass
+class InferenceServiceConfig:
+    host: str = "0.0.0.0"
+    port: int = 8000
+    model_version: str = "unknown"
+
+
+@dataclass
+class InferenceModelConfig:
+    model_path: str | Path = "results/final"
+    device: str = "cuda"
+    dtype: torch.dtype = torch.bfloat16
+    attn_implementation: str | None = None
+    min_pixels: int = 0
+    max_pixels: int = 0
+
+
+@dataclass
+class GenerationDefaultsConfig:
+    do_sample: bool = False
+    max_new_tokens: int = 128
+    num_beams: int = 1
+    temperature: float = 1.0
+
+
+@dataclass
+class InferenceLimitsConfig:
+    max_prompt_chars: int = 4000
+    max_images: int = 4
+    max_image_bytes: int = 8_000_000
+    max_image_pixels: int = 20_000_000
+    max_new_tokens: int = 512
