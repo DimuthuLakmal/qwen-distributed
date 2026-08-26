@@ -18,6 +18,7 @@ from src.training.fsdp import set_gradient_sync
 from src.training.schema import TrainState
 from src.utils.logger import logger
 from src.utils.dist_utils import get_rank
+from src.utils.tensor_utils import count_supervised_tokens, move_to_device
 from src.training.checkpoint import CheckpointManager
 from src.tracking.mlflow_tracker import MLflowTracker
 from src.tracking.perf_metrics import PerfMetricsS3Uploader
@@ -50,6 +51,7 @@ class SFTTrainer:
         checkpoint_manager: CheckpointManager = None,
         tracking: MLflowTracker | None = None,
         perf_metrics: PerfMetricsS3Uploader | None = None,
+        profiler: torch.profiler.profile | None = None,
     ) -> None:
 
         self.model = model
@@ -72,6 +74,7 @@ class SFTTrainer:
         self.checkpoint_manager = checkpoint_manager
         self.tracking = tracking
         self.perf_metrics = perf_metrics
+        self.profiler = profiler
 
         self._log_training_configuration()
 
@@ -157,7 +160,7 @@ class SFTTrainer:
                 )
 
             # Move batch to local GPU
-            batch = self._move_to_device(batch)
+            batch = move_to_device(batch, self.device)
 
             # Forward
             outputs = self.model(**batch)
@@ -171,7 +174,7 @@ class SFTTrainer:
 
 
             # Qwen's LM loss is averaged over supervised tokens.
-            supervised_tokens = self._count_supervised_tokens(batch["labels"])
+            supervised_tokens = count_supervised_tokens(batch["labels"])
             local_loss_sum += loss.detach().double() * supervised_tokens
             local_token_count += supervised_tokens
 
@@ -211,6 +214,9 @@ class SFTTrainer:
 
             if self.perf_metrics is not None:
                 self.perf_metrics.maybe_collect(self.state.optimizer_step)
+
+            if self.profiler is not None:
+                self.profiler.step()
 
             # Checkpointing
             if (
@@ -341,47 +347,6 @@ class SFTTrainer:
             num_warmup_steps=warmup_steps,
             num_training_steps=self.total_training_steps,
         )
-
-    def _move_to_device(self, value: Any,) -> Any:
-        """
-        Recursively move tensors onto this rank's CUDA device.
-        Keeps non-tensor metadata unchanged.
-        """
-
-        if isinstance(value, torch.Tensor,):
-            return value.to(self.device, non_blocking=True,)
-
-        if isinstance(value, dict):
-            return {
-                key: self._move_to_device(item) for key, item in value.items()
-            }
-
-        if isinstance(value, list):
-            return [self._move_to_device(item) for item in value]
-
-        if isinstance(value, tuple):
-            return tuple(self._move_to_device(item) for item in value)
-
-        return value
-
-    @staticmethod
-    def _count_supervised_tokens(labels: torch.Tensor,) -> torch.Tensor:
-        """
-        Count targets contributing to causal-LM loss.
-        Causal LM predicts:
-            token[t + 1]
-        from:
-            token[t]
-        so the first label position is not used by the shifted loss.
-        """
-
-        if labels.ndim != 2:
-            raise ValueError(
-                "Expected labels with shape [B, L], "
-                f"got {tuple(labels.shape)}."
-            )
-
-        return (labels[:, 1:] != -100).sum().double()
 
     def _log_step(
         self,

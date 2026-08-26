@@ -26,6 +26,7 @@ def _build_model_config():
         data_config_path=CONFIGS_DIR / "data.yaml",
         model_config_path=CONFIGS_DIR / "model.yaml",
         training_config_path=CONFIGS_DIR / "training.yaml",
+        tracking_config_path=CONFIGS_DIR / "tracking.yaml",
     )
 
     return config_manager.get_model_config()

@@ -8,7 +8,9 @@ from typing import Any
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import (
+    get_model_state_dict,
     get_state_dict,
+    set_model_state_dict,
     set_state_dict,
 )
 from torch.distributed.checkpoint.stateful import Stateful
@@ -80,6 +82,25 @@ class TrainingAppState(Stateful):
         self.train_state.batch_in_epoch = (trainer_state["batch_in_epoch"])
         self.train_state.micro_step = (trainer_state["micro_step"])
         self.train_state.optimizer_step = (trainer_state["optimizer_step"])
+
+
+class ModelOnlyAppState(Stateful):
+    """
+    Model-only counterpart to TrainingAppState.
+
+    Used to restore just the model weights from a checkpoint (e.g. for
+    evaluation), without needing an optimizer/scheduler to satisfy the
+    Stateful contract.
+    """
+
+    def __init__(self, model) -> None:
+        self.model = model
+
+    def state_dict(self) -> dict[str, Any]:
+        return {"model": get_model_state_dict(self.model)}
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        set_model_state_dict(self.model, model_state_dict=state_dict["model"])
 
 
 class CheckpointManager:
@@ -224,6 +245,34 @@ class CheckpointManager:
                 train_state.batch_in_epoch,
                 train_state.optimizer_step,
             )
+
+    def load_model(
+        self,
+        checkpoint_path: str | Path,
+        model,
+    ) -> None:
+        """
+        Restore only the model weights from a checkpoint, skipping the
+        optimizer/scheduler/trainer state. Intended for evaluation,
+        where no optimizer exists.
+
+        The model must already be FSDP2-sharded, same as load().
+        """
+
+        checkpoint_path = Path(checkpoint_path)
+        self._validate_checkpoint(checkpoint_path)
+
+        if get_rank() == 0:
+            logger.info("Loading model weights from checkpoint: %s", checkpoint_path,)
+
+        app_state = ModelOnlyAppState(model=model)
+
+        dcp.load(state_dict={"app": app_state,}, checkpoint_id=str(checkpoint_path),)
+
+        barrier()
+
+        if get_rank() == 0:
+            logger.info("Model weights restored from: %s", checkpoint_path,)
 
     def should_save(
         self,

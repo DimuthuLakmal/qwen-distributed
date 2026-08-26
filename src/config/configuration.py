@@ -12,6 +12,8 @@ from src.config.schema import (
     CheckpointConfig,
     ExportConfig,
     TrackingConfig,
+    EvalConfig,
+    ProfilerConfig,
 )
 
 _TORCH_DTYPES = {
@@ -24,10 +26,14 @@ _TORCH_DTYPES = {
 class ConfigurationManager:
     def __init__(self, data_config_path: Path,
                  model_config_path: Path,
-                 training_config_path: Path):
+                 training_config_path: Path,
+                 tracking_config_path: Path,
+                 eval_config_path: Path | None = None):
         self.data_config = read_yaml(data_config_path)
         self.model_config = read_yaml(model_config_path)
         self.training_config = read_yaml(training_config_path)
+        self.tracking_config = read_yaml(tracking_config_path)
+        self.eval_config = read_yaml(eval_config_path) if eval_config_path else None
 
     def get_data_config(self) -> DataConfig:
         config = self.data_config.dataset
@@ -151,8 +157,54 @@ class ConfigurationManager:
 
         return export_config
 
+    def get_eval_data_config(self) -> DataConfig:
+        config = self.eval_config.dataset
+
+        create_directories([d for d in (config.cache_dir, config.image_root) if d])
+
+        return DataConfig(
+            path=config.path,
+            split=config.split,
+            cache_dir=config.cache_dir,
+            image_root=config.image_root,
+            max_length=config.max_length,
+            adapter=config.adapter,
+        )
+
+    def get_eval_dataloader_config(self) -> DataLoaderConfig:
+        config = self.eval_config.dataloader
+
+        return DataLoaderConfig(
+            batch_size=config.batch_size,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_memory,
+            prefetch_factor=config.prefetch_factor,
+            drop_last=config.drop_last,
+        )
+
+    def get_eval_config(self) -> EvalConfig:
+        config = self.eval_config.evaluation
+
+        create_directories([config.output_dir] if config.output_dir else [])
+
+        return EvalConfig(
+            model_source=config.model_source,
+            checkpoint_dir=config.checkpoint_dir,
+            checkpoint_path=config.checkpoint_path,
+            pretrained_model_dir=config.pretrained_model_dir,
+            shard_pretrained_model=config.shard_pretrained_model,
+            compute_loss=config.compute_loss,
+            compute_generation_metrics=config.compute_generation_metrics,
+            max_new_tokens=config.max_new_tokens,
+            num_beams=config.num_beams,
+            do_sample=config.do_sample,
+            metrics=list(config.metrics) if config.metrics else None,
+            output_dir=config.output_dir,
+            save_predictions=config.save_predictions,
+        )
+
     def get_tracking_config(self) -> TrackingConfig:
-        config = self.training_config.tracking
+        config = self.tracking_config.tracking
 
         tracking_config = TrackingConfig(
             enabled=config.enabled,
@@ -166,3 +218,24 @@ class ConfigurationManager:
         )
 
         return tracking_config
+
+    def get_profiler_config(self) -> ProfilerConfig:
+        config = self.tracking_config.profiler
+
+        if config.enabled:
+            create_directories([config.output_dir])
+
+        profiler_config = ProfilerConfig(
+            enabled=config.enabled,
+            output_dir=config.output_dir,
+            wait_steps=config.wait_steps,
+            warmup_steps=config.warmup_steps,
+            active_steps=config.active_steps,
+            repeat=config.repeat,
+            record_shapes=config.record_shapes,
+            profile_memory=config.profile_memory,
+            with_stack=config.with_stack,
+            profile_ranks=list(config.profile_ranks) if config.profile_ranks else None,
+        )
+
+        return profiler_config

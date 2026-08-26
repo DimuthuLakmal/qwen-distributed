@@ -94,6 +94,40 @@ class ExportConfig:
 
 
 @dataclass
+class EvalConfig:
+    # "checkpoint"  -> restore weights from a CheckpointManager-written
+    #                  distributed (DCP) training checkpoint.
+    # "pretrained"  -> load a self-contained Hugging Face directory
+    #                  produced by export_huggingface_model().
+    model_source: str = "checkpoint"
+
+    # Used when model_source == "checkpoint".
+    checkpoint_dir: str | None = None
+    checkpoint_path: str = "latest"
+
+    # Used when model_source == "pretrained".
+    pretrained_model_dir: str | None = None
+
+    # Whether to FSDP2-shard the exported model across ranks (needed if it
+    # doesn't fit on a single GPU) or replicate the full model per rank and
+    # rely on DistributedSampler alone for data-parallel inference. Ignored
+    # for model_source == "checkpoint", which always shards (the checkpoint
+    # itself was written from a sharded model).
+    shard_pretrained_model: bool = True
+
+    compute_loss: bool = True
+
+    compute_generation_metrics: bool = True
+    max_new_tokens: int = 128
+    num_beams: int = 1
+    do_sample: bool = False
+    metrics: list[str] | None = None
+
+    output_dir: str = "results/eval"
+    save_predictions: bool = True
+
+
+@dataclass
 class TrackingConfig:
     enabled: bool = False
 
@@ -105,3 +139,21 @@ class TrackingConfig:
     s3_bucket: str | None = None
     s3_prefix: str = "metrics"
     metrics_log_interval: int = 50
+
+
+@dataclass
+class ProfilerConfig:
+    enabled: bool = False
+    output_dir: str = "results/profiler"
+    wait_steps: int = 1
+    warmup_steps: int = 1
+    active_steps: int = 3
+    repeat: int = 1
+    record_shapes: bool = False
+    profile_memory: bool = True
+    with_stack: bool = False
+
+    # Ranks to trace. Every rank under FSDP does near-identical work, so
+    # tracing all of them just multiplies multi-GB trace files. None means
+    # trace every rank.
+    profile_ranks: list[int] | None = None

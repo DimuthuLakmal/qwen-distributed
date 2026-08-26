@@ -8,6 +8,7 @@ from typing import Any
 from src.config.schema import TrackingConfig
 from src.utils.dist_utils import get_rank
 from src.utils.logger import logger
+import mlflow
 
 _MAX_PARAM_VALUE_LEN = 250
 _PARAMS_PER_BATCH = 100
@@ -59,8 +60,6 @@ class MLflowTracker:
         if not self._active:
             return
 
-        import mlflow
-
         params: dict[str, Any] = {}
         for prefix, config in named_configs.items():
             params.update(_flatten(config, prefix=f"{prefix}."))
@@ -75,8 +74,6 @@ class MLflowTracker:
     def log_metrics(self, metrics: dict[str, float], step: int) -> None:
         if not self._active:
             return
-
-        import mlflow
 
         try:
             mlflow.log_metrics(metrics, step=step)

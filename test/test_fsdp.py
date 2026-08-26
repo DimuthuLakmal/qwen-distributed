@@ -32,6 +32,7 @@ def _build_config_manager() -> ConfigurationManager:
         data_config_path=CONFIGS_DIR / "data.yaml",
         model_config_path=CONFIGS_DIR / "model.yaml",
         training_config_path=CONFIGS_DIR / "training.yaml",
+        tracking_config_path=CONFIGS_DIR / "tracking.yaml",
     )
 
 

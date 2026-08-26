@@ -29,12 +29,14 @@ from src.config.schema import (
     CheckpointConfig,
     ExportConfig,
     TrackingConfig,
+    ProfilerConfig,
 )
 from src.utils.dist_utils import barrier, get_rank
 from src.training.checkpoint import CheckpointManager
 from src.models.export import export_huggingface_model
 from src.tracking.mlflow_tracker import MLflowTracker
 from src.tracking.perf_metrics import PerfMetricsS3Uploader
+from src.tracking.profiler import build_profiler
 
 
 def run_training(data_config: DataConfig,
@@ -44,7 +46,8 @@ def run_training(data_config: DataConfig,
                 training_config: TrainingConfig,
                 checkpoint_config: CheckpointConfig,
                 export_config: ExportConfig,
-                tracking_config: TrackingConfig) -> None:
+                tracking_config: TrackingConfig,
+                profiler_config: ProfilerConfig) -> None:
     """
     Main Qwen-VL SFT training pipeline.
 
@@ -101,6 +104,7 @@ def run_training(data_config: DataConfig,
             training=training_config,
             checkpoint=checkpoint_config,
             export=export_config,
+            profiler=profiler_config,
         )
 
         perf_metrics = PerfMetricsS3Uploader(config=tracking_config, run_id=run_id)
@@ -167,26 +171,28 @@ def run_training(data_config: DataConfig,
         # entering training.
         barrier()
 
-        # Construct trainer
-        trainer = SFTTrainer(
-            model=model,
-            train_loader=train_loader,
-            config=training_config,
-            device=device,
-            checkpoint_manager=checkpoint_manager,
-            tracking=tracking,
-            perf_metrics=perf_metrics,
-        )
+        with build_profiler(profiler_config) as profiler:
+            # Construct trainer
+            trainer = SFTTrainer(
+                model=model,
+                train_loader=train_loader,
+                config=training_config,
+                device=device,
+                checkpoint_manager=checkpoint_manager,
+                tracking=tracking,
+                perf_metrics=perf_metrics,
+                profiler=profiler,
+            )
 
-        _resume_checkpoint(checkpoint_manager=checkpoint_manager, 
-                        checkpoint_config=checkpoint_config, 
-                        trainer=trainer)
+            _resume_checkpoint(checkpoint_manager=checkpoint_manager,
+                            checkpoint_config=checkpoint_config,
+                            trainer=trainer)
 
-        # Run training
-        if rank == 0:
-            logger.info("Beginning training...")
+            # Run training
+            if rank == 0:
+                logger.info("Beginning training...")
 
-        train_state = trainer.train()
+            train_state = trainer.train()
 
         # Final synchronization
         barrier()
@@ -294,6 +300,7 @@ def main() -> None:
         data_config_path=config_dir / "data.yaml",
         model_config_path=config_dir / "model.yaml",
         training_config_path=config_dir / "training.yaml",
+        tracking_config_path=config_dir / "tracking.yaml",
     )
 
     run_training(
@@ -305,6 +312,7 @@ def main() -> None:
         checkpoint_config=config_manager.get_checkpoint_config(),
         export_config=config_manager.get_export_config(),
         tracking_config=config_manager.get_tracking_config(),
+        profiler_config=config_manager.get_profiler_config(),
     )
 
 

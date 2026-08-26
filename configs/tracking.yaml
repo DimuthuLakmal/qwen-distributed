@@ -1,0 +1,42 @@
+tracking:
+  enabled: true
+
+  # MLflow tracks configs and training metrics (loss, lr, tokens/s).
+  # Defaults to a local file store under <checkpoint.directory>/mlruns if unset.
+  # Credentials (MLFLOW_TRACKING_USERNAME / MLFLOW_TRACKING_PASSWORD) are
+  # expected to already be set in the environment -- never hardcode them here.
+  mlflow_tracking_uri: "https://dagshub.com/DimuthuLakmal/qwen-distributed.mlflow"
+  mlflow_experiment_name: "qwen-vl-sft"
+  mlflow_run_name: "run-1"
+
+  # GPU utilization is an infra/perf metric rather than an experiment result,
+  # so it's written to S3 as CSV instead (for Grafana), rather than to MLflow.
+  # AWS credentials are read from the environment (AWS_ACCESS_KEY_ID /
+  # AWS_SECRET_ACCESS_KEY / AWS_DEFAULT_REGION) -- never hardcode them here.
+  log_perf_metrics: true
+  s3_bucket: "internvl-tracking-gpu-2"
+  s3_prefix: "metrics"
+  metrics_log_interval: 10
+
+profiler:
+  # torch.profiler trace of the train/eval step loop. Disabled by default --
+  # tracing adds overhead and writes trace files, so only turn it on when
+  # investigating a specific perf issue.
+  enabled: true
+  output_dir: "results/profiler"
+
+  # Steps skipped, warmed up, then actively traced per wait/warmup/active
+  # cycle (one cycle == one optimizer step in training, one batch in eval).
+  wait_steps: 1
+  warmup_steps: 3
+  active_steps: 1
+  repeat: 1
+
+  record_shapes: false
+  profile_memory: true
+  with_stack: false
+
+  # Ranks to trace. Every rank under FSDP does near-identical work, so
+  # tracing all of them just multiplies multi-GB trace files. Leave empty
+  # to trace every rank.
+  profile_ranks: [0]

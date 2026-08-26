@@ -7,7 +7,7 @@ dataset:
   adapter: 'llava_instruct'
 
 dataloader:
-  batch_size: 2
+  batch_size: 4
   num_workers: 8
   pin_memory: true
   prefetch_factor: 2

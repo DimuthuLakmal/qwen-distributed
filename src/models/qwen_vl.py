@@ -4,8 +4,8 @@ from typing import Any
 
 import torch
 from transformers import (
+    AutoModelForImageTextToText,
     AutoTokenizer,
-    Qwen2_5_VLForConditionalGeneration,
 )
 
 from src.models.schema import QwenVLModelBundle
@@ -48,7 +48,10 @@ def build_qwen_vl(
         )
 
     # Model Loading
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    # AutoModelForImageTextToText resolves to the right class (e.g.
+    # Qwen2_5_VLForConditionalGeneration, Qwen3VLForConditionalGeneration)
+    # based on config.model_id, so model.yaml can point at either family.
+    model = AutoModelForImageTextToText.from_pretrained(
         config.model_id,
         cache_dir=config.cache_dir,
         torch_dtype=config.dtype,
@@ -101,7 +104,7 @@ def build_qwen_vl(
 
 
 def _configure_trainable_modules(
-    model: Qwen2_5_VLForConditionalGeneration,
+    model: torch.nn.Module,
     freeze_vision: bool,
     freeze_language_model: bool,
     freeze_vision_merger: bool,

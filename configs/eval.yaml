@@ -1,0 +1,53 @@
+dataset:
+  path: "trl-lib/llava-instruct-mix"
+  split: "train"
+  cache_dir: "/data/gpfs/projects/punim2030/huggingface/cache"        # point at scratch/gpfs, not $HOME (quota)
+  image_root: null
+  max_length: 4096
+  adapter: 'llava_instruct'
+
+dataloader:
+  batch_size: 16
+  num_workers: 8
+  pin_memory: true
+  prefetch_factor: 2
+  drop_last: false
+
+evaluation:
+  # "checkpoint" -> restore weights from a CheckpointManager-written
+  #                 distributed (DCP) training checkpoint (checkpoint_dir/checkpoint_path below).
+  # "pretrained" -> load a self-contained Hugging Face directory produced by
+  #                 export_huggingface_model() / model.export in model.yaml (pretrained_model_dir below).
+  model_source: "pretrained"
+
+  # Directory that CheckpointManager wrote training checkpoints to
+  # (matches training.yaml's checkpoint.directory). Used when model_source == "checkpoint".
+  checkpoint_dir: "./results/checkpoints"
+
+  # "latest" -> most recent completed checkpoint under checkpoint_dir
+  # /path    -> an explicit checkpoint step directory
+  checkpoint_path: "latest"
+
+  # Path to an exported Hugging Face model directory, OR (for a smoke test
+  # with no export yet) a Hugging Face Hub model id -- both are valid
+  # `model_id` values for AutoModelForImageTextToText.from_pretrained().
+  # Used when model_source == "pretrained".
+  pretrained_model_dir: "Qwen/Qwen3-VL-8B-Instruct"
+
+  # Only used when model_source == "pretrained".
+  # true  -> FSDP2-shard the exported model across ranks (needed if it doesn't fit on one GPU).
+  # false -> replicate the full model on every rank; ranks split the eval set via DistributedSampler.
+  shard_pretrained_model: false
+
+  # Held-out loss / perplexity via a forward-only pass.
+  compute_loss: false
+
+  # Generation-based task metrics (model.generate() vs. reference answers).
+  compute_generation_metrics: true
+  max_new_tokens: 128
+  num_beams: 1
+  do_sample: false
+  metrics: ["exact_match"]
+
+  output_dir: "results/eval"
+  save_predictions: true

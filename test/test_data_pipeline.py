@@ -36,6 +36,7 @@ def _build_sft_dataset() -> tuple[SFTDataset, DataLoaderConfig]:
         data_config_path=CONFIGS_DIR / "data.yaml",
         model_config_path=CONFIGS_DIR / "model.yaml",
         training_config_path=CONFIGS_DIR / "training.yaml",
+        tracking_config_path=CONFIGS_DIR / "tracking.yaml",
     )
 
     data_config = config_manager.get_data_config()
