@@ -1,0 +1,13 @@
+# Additional dependencies for the Stage 1 inference service
+# (src/inference, src/api, src/pipeline/serve.py).
+#
+# The rest of the project's dependencies (torch, transformers, datasets,
+# mlflow, etc.) are managed outside this repo (see the `llm` conda env on
+# the cluster) and are not duplicated here.
+
+fastapi==0.115.11
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pillow==11.0.0
+httpx==0.28.1   # required by fastapi.testclient.TestClient in tests
+pytest==9.1.1
