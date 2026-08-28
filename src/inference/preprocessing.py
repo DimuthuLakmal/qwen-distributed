@@ -19,6 +19,8 @@ from PIL import Image, UnidentifiedImageError
 
 from src.config.schema import GenerationDefaultsConfig, InferenceLimitsConfig
 from src.inference.schema import GenerationConfig, ImageInput, InferenceRequest
+from src.inference.schema import RawImage
+from src.inference.exception import InvalidGenerationOptionsError, InvalidRequestError, PayloadTooLargeError, UnsupportedMediaTypeError
 
 # Formats we are confident the Qwen processor / downstream pipeline handles
 # correctly. Anything else is rejected rather than guessed at.
@@ -32,32 +34,7 @@ _ALLOWED_GENERATION_OVERRIDE_KEYS = {
 }
 
 
-class InvalidRequestError(Exception):
-    """The request body itself is malformed or missing required fields."""
-
-
-class UnsupportedMediaTypeError(Exception):
-    """An uploaded image is not a supported or decodable image type."""
-
-
-class PayloadTooLargeError(Exception):
-    """An uploaded image exceeds configured byte-size or pixel limits."""
-
-
-class InvalidGenerationOptionsError(Exception):
-    """Requested generation options are invalid or exceed server limits."""
-
-
-@dataclass
-class RawImage:
-    """An uploaded image before decoding/validation."""
-
-    data: bytes
-    content_type: str | None = None
-
-
 def validate_and_build_request(
-    *,
     prompt: str | None,
     system_prompt: str | None,
     raw_images: list[RawImage],
@@ -123,7 +100,6 @@ def build_conversation_messages(request: InferenceRequest) -> list[dict[str, Any
         {"type": "image", "image": image_input.image} for image_input in request.images
     ]
     content.append({"type": "text", "text": request.prompt})
-
     messages.append({"role": "user", "content": content})
 
     return messages
@@ -162,9 +138,7 @@ def _decode_and_validate_image(
         image = Image.open(io.BytesIO(raw_image.data))
         image.load()
     except (UnidentifiedImageError, OSError) as exc:
-        raise UnsupportedMediaTypeError(
-            "Uploaded file could not be decoded as an image."
-        ) from exc
+        raise UnsupportedMediaTypeError("Uploaded file could not be decoded as an image.") from exc
 
     if image.format not in _ALLOWED_IMAGE_FORMATS:
         raise UnsupportedMediaTypeError(

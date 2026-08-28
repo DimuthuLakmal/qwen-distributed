@@ -58,7 +58,6 @@ class InferenceService:
 
     def generate(
         self,
-        *,
         request_id: str,
         prompt: str | None,
         system_prompt: str | None = None,
@@ -73,6 +72,7 @@ class InferenceService:
         and `InferenceExecutionError` for unexpected engine failures.
         """
 
+        # Fail fast if the engine isn't ready yet.
         if not self.is_ready():
             raise EngineNotReadyError("Inference engine is not ready yet.")
 
@@ -98,9 +98,7 @@ class InferenceService:
                 time.perf_counter() - start_time,
                 type(exc).__name__,
             )
-            raise InferenceExecutionError(
-                "Inference engine failed to generate a response."
-            ) from exc
+            raise InferenceExecutionError("Inference engine failed to generate a response.") from exc
 
         response = postprocess_response(response)
 

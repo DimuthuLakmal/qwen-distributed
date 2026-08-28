@@ -16,7 +16,6 @@ from src.inference.schema import InferenceResponse
 
 def postprocess_response(response: InferenceResponse) -> InferenceResponse:
     normalized_text = _normalize_text(response.generated_text)
-
     if normalized_text == response.generated_text:
         return response
 
@@ -24,6 +23,4 @@ def postprocess_response(response: InferenceResponse) -> InferenceResponse:
 
 
 def _normalize_text(text: str) -> str:
-    """Collapse surrounding whitespace only; do not touch interior content."""
-
     return text.strip()

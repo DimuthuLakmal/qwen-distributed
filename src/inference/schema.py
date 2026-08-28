@@ -17,8 +17,14 @@ from PIL import Image
 @dataclass
 class ImageInput:
     """A single decoded, validated image ready for engine consumption."""
-
     image: Image.Image
+
+
+@dataclass
+class RawImage:
+    """An uploaded image before decoding/validation."""
+    data: bytes
+    content_type: str | None = None
 
 
 @dataclass

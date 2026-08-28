@@ -14,7 +14,6 @@ from src.inference.schema import InferenceRequest, InferenceResponse
 class FakeInferenceEngine(InferenceEngine):
     def __init__(
         self,
-        *,
         generated_text: str = "a generated response",
         model_version: str = "fake-model-v0",
         ready: bool = True,
