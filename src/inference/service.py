@@ -7,7 +7,7 @@ tests with `FakeInferenceEngine` (see `src/inference/engines/fake.py`).
 
 from __future__ import annotations
 
-import threading
+import asyncio
 import time
 
 from src.config.schema import GenerationDefaultsConfig, InferenceLimitsConfig
@@ -23,6 +23,7 @@ from src.inference.exception import (
 from src.inference.postprocessing import postprocess_response
 from src.inference.preprocessing import RawImage, validate_and_build_request
 from src.inference.schema import InferenceResponse
+from src.tracking.inference_metrics import InferenceMetricsRecorder
 from src.utils.logger import logger
 
 # Re-exported so existing call sites (`from src.inference.service import
@@ -46,26 +47,32 @@ class InferenceService:
         limits: InferenceLimitsConfig,
         defaults: GenerationDefaultsConfig,
         worker_id: str | None = None,
+        metrics: InferenceMetricsRecorder | None = None,
     ) -> None:
         self.engine = engine
         self.limits = limits
         self.defaults = defaults
         # Logging-only identity; the service itself stays HTTP/worker-agnostic.
         self.worker_id = worker_id
+        # No-ops throughout when tracking is disabled/unset -- see
+        # InferenceMetricsRecorder's docstring.
+        self.metrics = metrics
         self._active_requests = 0
-        # `generate()` is dispatched via `asyncio.to_thread`, so concurrent
-        # calls run in real OS threads -- a threading.Lock, not an
-        # asyncio.Lock, is the correct primitive here.
-        self._active_requests_lock = threading.Lock()
+        # Guards only the counter below, never the `await self.engine.generate(...)`
+        # call itself -- multiple requests must be able to be in-flight in the
+        # engine concurrently (required for vLLM's internal continuous batching;
+        # see claude.md's Concurrency section). An asyncio.Lock is correct here
+        # since `generate()` now runs on the event loop, not in a worker thread.
+        self._active_requests_lock = asyncio.Lock()
 
-    def is_ready(self) -> bool:
-        return self.engine.health()
+    async def is_ready(self) -> bool:
+        return await self.engine.health()
 
     @property
     def active_request_count(self) -> int:
         return self._active_requests
 
-    def generate(
+    async def generate(
         self,
         request_id: str,
         prompt: str | None,
@@ -82,7 +89,7 @@ class InferenceService:
         """
 
         # Fail fast if the engine isn't ready yet.
-        if not self.is_ready():
+        if not await self.is_ready():
             raise EngineNotReadyError("Inference engine is not ready yet.")
 
         request = validate_and_build_request(
@@ -97,11 +104,11 @@ class InferenceService:
 
         start_time = time.perf_counter()
 
-        with self._active_requests_lock:
+        async with self._active_requests_lock:
             self._active_requests += 1
 
         try:
-            response = self.engine.generate(request)
+            response = await self.engine.generate(request)
         except Exception as exc:
             logger.error(
                 "Inference request failed | request_id=%s | worker_id=%s | success=False | "
@@ -113,22 +120,32 @@ class InferenceService:
             )
             raise InferenceExecutionError("Inference engine failed to generate a response.") from exc
         finally:
-            with self._active_requests_lock:
+            async with self._active_requests_lock:
                 self._active_requests -= 1
 
         response = postprocess_response(response)
 
+        tokens_per_second = response.output_token_count / max(response.latency_seconds, 1e-8)
+
         logger.info(
             "Inference request completed | request_id=%s | worker_id=%s | model_version=%s | "
             "success=True | latency_seconds=%.3f | input_tokens=%d | output_tokens=%d | "
-            "active_requests=%d",
+            "tokens_per_second=%.1f | active_requests=%d",
             response.request_id,
             self.worker_id,
             response.model_version,
             response.latency_seconds,
             response.input_token_count,
             response.output_token_count,
+            tokens_per_second,
             self.active_request_count,
         )
+
+        if self.metrics is not None:
+            self.metrics.record_request(
+                input_tokens=response.input_token_count,
+                output_tokens=response.output_token_count,
+                latency_seconds=response.latency_seconds,
+            )
 
         return response

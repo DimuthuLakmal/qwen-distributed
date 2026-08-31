@@ -3,8 +3,8 @@ Single source of truth for mapping inference-module exceptions (see
 `src/inference/exception.py`) to sanitized HTTP responses, and for ensuring
 unexpected errors never leak stack traces / internal details to clients.
 
-Shared unchanged by both the worker (`src/inference/api/`) and the public
-router (`src/inference/router/`) apps: both call `register_error_handlers(app)`
+Shared unchanged by both the worker (`src/inference/transformers/worker_app/`) and the public
+router (`src/inference/transformers/router/`) apps: both call `register_error_handlers(app)`
 with no arguments. Neither process ever raises every type in the map below
 (e.g. a worker never raises `NoHealthyWorkerError`), but registering a
 handler for a type that's never thrown there is harmless -- this keeps the

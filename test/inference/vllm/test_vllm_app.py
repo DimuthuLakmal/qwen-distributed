@@ -1,12 +1,21 @@
+"""
+End-to-end tests for the single-process FastAPI app used by the vLLM
+backend topology -- exercised entirely against FakeInferenceEngine, so no
+real vLLM engine or GPU is involved. This is the topology-level test
+coverage for todo.md Task 5's new "public API -> VLLMEngine" path, and
+mirrors the case matrix the old (deleted) `src/api/app.py` tests used to
+cover for the single-process Transformers app.
+"""
+
 import io
 import json
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from src.api.app import create_app
 from src.config.schema import GenerationDefaultsConfig, InferenceLimitsConfig
 from src.inference.engines.fake import FakeInferenceEngine
+from src.inference.vllm.app import create_vllm_app
 
 
 def _limits(**overrides) -> InferenceLimitsConfig:
@@ -26,7 +35,7 @@ def _defaults() -> GenerationDefaultsConfig:
 
 
 def _client(engine: FakeInferenceEngine, **limit_overrides) -> TestClient:
-    app = create_app(
+    app = create_vllm_app(
         engine_factory=lambda: engine,
         limits=_limits(**limit_overrides),
         defaults=_defaults(),
@@ -156,7 +165,7 @@ def test_generate_when_engine_not_ready_returns_503():
 
 def test_generate_unexpected_engine_error_returns_500_without_stack_trace():
     class _BrokenEngine(FakeInferenceEngine):
-        def generate(self, request):
+        async def generate(self, request):
             raise RuntimeError("/secret/internal/path was not found")
 
     engine = _BrokenEngine()
@@ -184,3 +193,32 @@ def test_generate_response_includes_request_id_header():
 
     assert "x-request-id" in response.headers
     assert response.json()["request_id"]
+
+
+def test_liveness_always_succeeds_even_when_engine_not_ready():
+    engine = FakeInferenceEngine(ready=False)
+
+    with _client(engine) as client:
+        response = client.get("/health/live")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "alive"}
+
+
+def test_readiness_succeeds_when_engine_ready():
+    engine = FakeInferenceEngine(ready=True)
+
+    with _client(engine) as client:
+        response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
+def test_readiness_fails_when_engine_not_ready():
+    engine = FakeInferenceEngine(ready=False)
+
+    with _client(engine) as client:
+        response = client.get("/health/ready")
+
+    assert response.status_code == 503

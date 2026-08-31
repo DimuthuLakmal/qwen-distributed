@@ -5,8 +5,8 @@ Stored on `request.state.request_id` so route handlers, the InferenceService
 call, and error handlers can all trace a single request end-to-end, and
 echoed back as the `X-Request-ID` response header.
 
-Shared by both the worker (`src/inference/api/`) and the public router
-(`src/inference/router/`) apps so a request ID set by the router survives
+Shared by both the worker (`src/inference/transformers/worker_app/`) and the public router
+(`src/inference/transformers/router/`) apps so a request ID set by the router survives
 into the forwarded worker call and back.
 """
 

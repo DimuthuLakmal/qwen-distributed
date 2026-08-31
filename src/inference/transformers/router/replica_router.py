@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 
 from src.inference.exception import NoHealthyWorkerError
-from src.inference.router.registry import WorkerRecord, WorkerRegistry
+from src.inference.transformers.router.registry import WorkerRecord, WorkerRegistry
 
 
 class ReplicaRouter:

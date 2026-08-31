@@ -3,10 +3,43 @@ service:
   port: 8000
   model_version: "qwen-vl-sft-v1"
 
-model:
+engine:
+  type: "vllm"
+
+  # Only read when type == "vllm". vLLM owns its own internal data-parallel
+  # replica management for this backend -- tensor_parallel_size must stay 1
+  # this stage; data_parallel_size may be a positive integer or "auto"
+  # (resolves to the number of visible GPUs at startup).
+  vllm:
+    # Hugging Face hub repo id (e.g. "Qwen/Qwen3.5-9B") or a local model
+    # directory -- vLLM resolves either directly, no export step required.
+    model_id: "Qwen/Qwen3.5-9B"
+    # Where vLLM stores/looks up downloaded checkpoints (its `download_dir`).
+    # Point at scratch/gpfs, not $HOME (quota).
+    cache_dir: "/home/student.unimelb.edu.au/dkariyawasan/llm_models"
+    dtype: "bfloat16"
+
+    data_parallel_size: 1
+    tensor_parallel_size: 1
+    gpu_memory_utilization: 0.85
+    max_model_len: 4096
+    max_num_seqs: 16
+
+    limit_mm_per_prompt:
+      image: 4
+      video: 0
+
+    mm_processor_kwargs:
+      max_pixels: 1003520
+
+# Read by the "transformers" engine only (either the standalone worker
+# process, or engine.type: "transformers" topology). Ignored when
+# engine.type == "vllm" -- see engine.vllm above for that engine's own
+# model_id/cache_dir/dtype.
+transformers:
   # Exported Hugging Face artifact directory (see model.yaml's export.output_dir),
   # not a training-format Distributed Checkpoint (DCP) directory.
-  model_path: "results/final"
+  model_path: "/home/student.unimelb.edu.au/dkariyawasan/llm_models/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a"
   device: "cuda"
   dtype: "bfloat16"
   attn_implementation: "flash_attention_2"
@@ -15,9 +48,9 @@ model:
 
 generation:
   do_sample: false
-  max_new_tokens: 128
+  max_new_tokens: 8192
   num_beams: 1
-  temperature: 1.0
+  temperature: 0.0
 
 limits:
   max_prompt_chars: 4000
@@ -26,7 +59,45 @@ limits:
   max_image_pixels: 20000000
   # Hard ceiling. Request-level max_new_tokens is clamped to this and can
   # never exceed it.
-  max_new_tokens: 512
+  max_new_tokens: 8192
+
+# Efficiency-metrics tracking for the serving process (latency, throughput,
+# GPU utilization) -- never accuracy, which has no meaning for a served
+# request. Disabled by default; both sections are optional (omit entirely to
+# keep everything off). See src/tracking/inference_metrics.py.
+tracking:
+  enabled: true
+
+  mlflow_tracking_uri: "https://dagshub.com/DimuthuLakmal/qwen-distributed.mlflow"
+  mlflow_experiment_name: "qwen-vl-inference"
+  mlflow_run_name: null
+
+  # GPU utilization/memory, sampled by a background task decoupled from
+  # request traffic (see InferenceGPUMetricsSampler) and written to S3 as
+  # avg/min/max per flush interval, for Grafana.
+  log_perf_metrics: false
+  s3_bucket: "internvl-tracking-gpu-2"
+  s3_prefix: "metrics"
+  # Seconds between GPU-metrics flushes (not a step/request count -- request
+  # completions are too bursty/idle for that, see module docstring).
+  metrics_log_interval: 30
+
+# torch.profiler toggle for the serving process. For engine.type == "vllm"
+# this drives vLLM's own engine-native profiler (reaches into its
+# data-parallel engine-core subprocesses); for "transformers" it wraps the
+# in-process generate() calls directly. "Step" here is one served request.
+profiler:
+  enabled: true
+  output_dir: "results/inference_profiler"
+
+  wait_steps: 0
+  warmup_steps: 1
+  active_steps: 1
+  repeat: 1
+
+  record_shapes: false
+  profile_memory: true
+  with_stack: false
 
 # Read by the public router only; each worker process ignores this section.
 workers:

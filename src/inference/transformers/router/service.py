@@ -1,7 +1,7 @@
 """
 RouterService: coordinates worker selection, forwarding, failure bookkeeping,
 and router-side observability. Contains no HTTP/framework code of its own --
-`src/inference/router/routes/inference.py` is the only caller.
+`src/inference/transformers/router/routes/inference.py` is the only caller.
 """
 
 from __future__ import annotations
@@ -11,9 +11,9 @@ import time
 
 from src.config.schema import InferenceLimitsConfig
 from src.inference.exception import WorkerConnectionError, WorkerUnavailableError
-from src.inference.router.registry import WorkerRegistry
-from src.inference.router.replica_router import ReplicaRouter
-from src.inference.router.worker_client import WorkerClient
+from src.inference.transformers.router.registry import WorkerRegistry
+from src.inference.transformers.router.replica_router import ReplicaRouter
+from src.inference.transformers.router.worker_client import WorkerClient
 from src.inference.schema import WorkerGenerateRequestSchema, WorkerGenerateResponseSchema
 from src.utils.logger import logger
 

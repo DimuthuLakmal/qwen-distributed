@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.inference.router.dependencies import get_router_service
-from src.inference.router.service import RouterService
+from src.inference.transformers.router.dependencies import get_router_service
+from src.inference.transformers.router.service import RouterService
 
 router = APIRouter(prefix="/health", tags=["health"])
 

@@ -19,42 +19,21 @@ from __future__ import annotations
 import base64
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
-from src.inference.preprocessing import PayloadTooLargeError, validate_image_count, validate_prompt
-from src.inference.router.dependencies import get_router_service
-from src.inference.router.service import RouterService
+from src.inference.http_utils import read_bounded_upload
+from src.inference.preprocessing import validate_image_count, validate_prompt
 from src.inference.schema import (
+    GenerateRequestSchema,
+    GenerateResponseSchema,
     WorkerGenerateRequestSchema,
     WorkerGenerationOptions,
     WorkerImagePayload,
 )
+from src.inference.transformers.router.dependencies import get_router_service
+from src.inference.transformers.router.service import RouterService
 
 router = APIRouter(prefix="/v1", tags=["inference"])
-
-_READ_CHUNK_BYTES = 1024 * 1024
-
-
-class GenerationOptionsSchema(BaseModel):
-    do_sample: bool | None = None
-    max_new_tokens: int | None = None
-    num_beams: int | None = None
-    temperature: float | None = None
-
-
-class GenerateRequestSchema(BaseModel):
-    prompt: str
-    system_prompt: str | None = None
-    generation: GenerationOptionsSchema | None = None
-
-
-class GenerateResponseSchema(BaseModel):
-    request_id: str
-    generated_text: str
-    model_version: str
-    input_token_count: int
-    output_token_count: int
-    latency_seconds: float
 
 
 @router.post("/generate", response_model=GenerateResponseSchema)
@@ -74,7 +53,8 @@ async def generate(
 
     image_payloads = [
         WorkerImagePayload(
-            data_base64=base64.b64encode(await _read_bounded(image, service.limits.max_image_bytes)
+            data_base64=base64.b64encode(
+                await read_bounded_upload(image, service.limits.max_image_bytes)
             ).decode("ascii"),
             content_type=image.content_type,
         )
@@ -99,25 +79,3 @@ async def generate(
 
     response = await service.generate(worker_request)
     return GenerateResponseSchema(**response.model_dump())
-
-
-async def _read_bounded(upload_file: UploadFile, max_bytes: int) -> bytes:
-    """
-    Read an upload incrementally and abort as soon as it exceeds `max_bytes`,
-    instead of buffering an arbitrarily large upload fully into memory first.
-    """
-    chunks: list[bytes] = []
-    total_bytes = 0
-
-    while True:
-        chunk = await upload_file.read(_READ_CHUNK_BYTES)
-        if not chunk:
-            break
-
-        total_bytes += len(chunk)
-        if total_bytes > max_bytes:
-            raise PayloadTooLargeError(f"image payload exceeds the configured limit of {max_bytes} bytes.")
-
-        chunks.append(chunk)
-
-    return b"".join(chunks)

@@ -108,7 +108,7 @@ def build_conversation_messages(request: InferenceRequest) -> list[dict[str, Any
 def validate_prompt(prompt: str | None, limits: InferenceLimitsConfig) -> None:
     """
     Public so the router can apply the same prompt-length rule at the HTTP
-    edge, before forwarding to a worker (see `src/inference/router/routes/inference.py`).
+    edge, before forwarding to a worker (see `src/inference/transformers/router/routes/inference.py`).
     """
 
     if prompt is None or not prompt.strip():
@@ -124,7 +124,7 @@ def validate_prompt(prompt: str | None, limits: InferenceLimitsConfig) -> None:
 def validate_image_count(count: int, limits: InferenceLimitsConfig) -> None:
     """
     Public so the router can reject an oversized image count at the HTTP
-    edge, before forwarding to a worker (see `src/inference/router/routes/inference.py`).
+    edge, before forwarding to a worker (see `src/inference/transformers/router/routes/inference.py`).
     """
 
     if count > limits.max_images:
@@ -201,7 +201,7 @@ def _build_generation_config(
         raise InvalidGenerationOptionsError("do_sample must be a boolean.")
 
     temperature = overrides.get("temperature", defaults.temperature)
-    if not isinstance(temperature, (int, float)) or temperature <= 0:
+    if not isinstance(temperature, (int, float)) or temperature < 0:
         raise InvalidGenerationOptionsError("temperature must be a positive number.")
 
     return GenerationConfig(

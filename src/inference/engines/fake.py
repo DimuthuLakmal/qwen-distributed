@@ -25,7 +25,7 @@ class FakeInferenceEngine(InferenceEngine):
         self.latency_seconds = latency_seconds
         self.received_requests: list[InferenceRequest] = []
 
-    def generate(self, request: InferenceRequest) -> InferenceResponse:
+    async def generate(self, request: InferenceRequest) -> InferenceResponse:
         self.received_requests.append(request)
 
         return InferenceResponse(
@@ -37,5 +37,5 @@ class FakeInferenceEngine(InferenceEngine):
             latency_seconds=self.latency_seconds,
         )
 
-    def health(self) -> bool:
+    async def health(self) -> bool:
         return self.ready

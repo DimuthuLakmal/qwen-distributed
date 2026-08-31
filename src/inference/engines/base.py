@@ -5,18 +5,18 @@ Inference engine interface.
 concrete runtime (Transformers, and later vLLM). This is what keeps the
 runtime replaceable.
 
-Sync-by-design
---------------
-`generate()` and `health()` are plain synchronous methods, not `async def`.
-The real work behind `generate()` (`model.generate()`) is a blocking
-GPU/CPU-bound call; wrapping it in `async def` would not make it
-non-blocking, it would just hide a blocking call inside a coroutine and risk
-stalling the event loop if awaited directly. The FastAPI layer is the single
-async boundary: it runs `InferenceService.generate(...)` (itself sync, for
-the same reason and for trivial unit testing with `FakeInferenceEngine`) via
-`asyncio.to_thread(...)`. `health()` is expected to be a cheap, non-blocking
-readiness flag check, so it is called directly from the async route without
-offloading.
+Async-by-design
+---------------
+`generate()` and `health()` are `async def`. This is what lets a vLLM-backed
+engine drive `AsyncLLM`'s async-generator `generate()` API directly on the
+event loop, so multiple in-flight requests can be interleaved by vLLM's own
+scheduler instead of being serialized behind an application-level lock or
+thread pool. A synchronous, blocking engine (Transformers) still fits this
+contract cleanly: it offloads its own blocking call internally via
+`asyncio.to_thread(...)` (see `TransformersQwenVLEngine.generate`), so the
+thread-offload boundary lives inside the engine rather than at the service/
+route layer. `health()` is expected to be cheap; a synchronous engine can
+implement it as a trivial `async def` with no `await` inside.
 """
 
 from __future__ import annotations
@@ -28,9 +28,9 @@ from src.inference.schema import InferenceRequest, InferenceResponse
 
 class InferenceEngine(ABC):
     @abstractmethod
-    def generate(self, request: InferenceRequest) -> InferenceResponse:
+    async def generate(self, request: InferenceRequest) -> InferenceResponse:
         """Run generation for a single validated request."""
 
     @abstractmethod
-    def health(self) -> bool:
+    async def health(self) -> bool:
         """Return True once the engine has finished loading and can serve requests."""

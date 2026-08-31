@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
@@ -167,7 +167,7 @@ class InferenceServiceConfig:
 
 
 @dataclass
-class InferenceModelConfig:
+class InferenceTransformersModelConfig:
     model_path: str | Path = "results/final"
     device: str = "cuda"
     dtype: torch.dtype = torch.bfloat16
@@ -191,6 +191,32 @@ class InferenceLimitsConfig:
     max_image_bytes: int = 8_000_000
     max_image_pixels: int = 20_000_000
     max_new_tokens: int = 512
+
+
+@dataclass
+class VLLMConfig:
+    # Hugging Face hub repo id (e.g. "Qwen/Qwen3.5-9B") or a local model
+    # directory. vLLM resolves either the same way it resolves `model=`.
+    model_id: str = ""
+    # Where vLLM stores/looks up downloaded checkpoints (its `download_dir`).
+    # None lets vLLM fall back to its own default (~/.cache/huggingface).
+    cache_dir: str | Path | None = None
+    # vLLM's own dtype string (e.g. "bfloat16", "auto") -- not a torch.dtype,
+    # unlike InferenceTransformersModelConfig.dtype.
+    dtype: str = "auto"
+    data_parallel_size: int | str = 1        # positive int, or literal "auto"
+    tensor_parallel_size: int = 1            # must be 1 in this stage
+    gpu_memory_utilization: float = 0.85
+    max_model_len: int = 4096
+    max_num_seqs: int = 16
+    limit_mm_per_prompt: dict[str, int] = field(default_factory=lambda: {"image": 4, "video": 0})
+    mm_processor_kwargs: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class EngineConfig:
+    type: str = "transformers"           # "transformers" | "vllm"
+    vllm: VLLMConfig | None = None        # required iff type == "vllm"
 
 
 @dataclass

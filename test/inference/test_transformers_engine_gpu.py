@@ -2,7 +2,7 @@
 GPU smoke test for TransformersQwenVLEngine against the real exported model.
 
 NOTE: This loads the real Hugging Face artifact configured in
-configs/inference.yaml (model.model_path) onto a real device and runs a real
+configs/inference.yaml (transformers.model_path) onto a real device and runs a real
 generation -- run this on a compute node (srun/sbatch), not the shared login
 node. If the exported model directory does not exist yet (export hasn't run),
 the test is skipped rather than failed.
@@ -13,6 +13,7 @@ or directly:
     python test/inference/test_transformers_engine_gpu.py
 """
 
+import asyncio
 from pathlib import Path
 
 from PIL import Image
@@ -29,7 +30,7 @@ def _load_engine_or_skip() -> TransformersQwenVLEngine:
     import pytest
 
     config_manager = ConfigurationManager(inference_config_path=CONFIGS_DIR / "inference.yaml")
-    model_config = config_manager.get_inference_model_config()
+    model_config = config_manager.get_inference_transformers_model_config()
     service_config = config_manager.get_inference_service_config()
 
     if not Path(model_config.model_path).exists():
@@ -52,7 +53,7 @@ def test_real_engine_generates_text_for_image_and_prompt():
         generation=GenerationConfig(max_new_tokens=32, do_sample=False, num_beams=1),
     )
 
-    response = engine.generate(request)
+    response = asyncio.run(engine.generate(request))
 
     assert response.generated_text
     assert response.input_token_count > 0

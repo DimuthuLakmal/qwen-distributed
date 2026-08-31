@@ -3,7 +3,7 @@ GPU worker entrypoint.
 
 One worker process owns one full Qwen-VL model replica on one physical GPU.
 Assign the GPU explicitly via `CUDA_VISIBLE_DEVICES` and use the default
-`cuda:0` (or whatever `model.device` is configured to) inside the process --
+`cuda:0` (or whatever `transformers.device` is configured to) inside the process --
 do not rely on multiple worker processes auto-distributing themselves across
 GPUs.
 
@@ -25,8 +25,9 @@ from pathlib import Path
 import uvicorn
 
 from src.config.configuration import ConfigurationManager
-from src.inference.api.app import create_worker_app
 from src.inference.engines.transformers import TransformersQwenVLEngine
+from src.inference.transformers.worker_app.app import create_worker_app
+from src.tracking.inference_metrics import InferenceMetricsRecorder
 from src.utils.logger import logger
 
 
@@ -36,21 +37,33 @@ def main() -> None:
     config_manager = ConfigurationManager(inference_config_path=args.config)
 
     service_config = config_manager.get_inference_service_config()
-    model_config = config_manager.get_inference_model_config()
+    model_config = config_manager.get_inference_transformers_model_config()
     generation_defaults = config_manager.get_generation_defaults_config()
     limits = config_manager.get_inference_limits_config()
+    tracking_config = config_manager.get_inference_tracking_config()
+    profiler_config = config_manager.get_inference_profiler_config()
 
     host = args.host or service_config.host
     port = args.port or int(os.environ.get("WORKER_PORT", 0)) or service_config.port
 
     def engine_factory() -> TransformersQwenVLEngine:
-        return TransformersQwenVLEngine(model_config, model_version=service_config.model_version)
+        return TransformersQwenVLEngine(
+            model_config, model_version=service_config.model_version, profiler_config=profiler_config
+        )
+
+    # model_version is suffixed with worker_id so each worker process falls
+    # back to its own MLflow run/S3 key when tracking.mlflow_run_name isn't
+    # explicitly set -- otherwise multiple workers on one host would collide.
+    metrics = InferenceMetricsRecorder(
+        tracking_config, model_version=f"{service_config.model_version}-{args.worker_id}"
+    )
 
     app = create_worker_app(
         worker_id=args.worker_id,
         engine_factory=engine_factory,
         limits=limits,
         defaults=generation_defaults,
+        metrics=metrics,
     )
 
     logger.info(
@@ -76,7 +89,7 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help=(
             "Path to the shared inference configuration file (e.g. configs/inference.yaml). "
-            "The worker reads service/model/generation/limits and ignores workers/routing."
+            "The worker reads service/transformers/generation/limits and ignores workers/routing."
         ),
     )
     parser.add_argument(

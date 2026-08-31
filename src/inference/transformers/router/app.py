@@ -15,9 +15,9 @@ from fastapi import FastAPI
 from src.inference.middleware.error_handler import register_error_handlers
 from src.inference.middleware.logging import AccessLogMiddleware
 from src.inference.middleware.request_id import RequestIDMiddleware
-from src.inference.router.routes.health import router as health_router
-from src.inference.router.routes.inference import router as inference_router
-from src.inference.router.service import RouterService
+from src.inference.transformers.router.routes.health import router as health_router
+from src.inference.transformers.router.routes.inference import router as inference_router
+from src.inference.transformers.router.service import RouterService
 from src.utils.logger import logger
 
 

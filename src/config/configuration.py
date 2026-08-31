@@ -15,14 +15,17 @@ from src.config.schema import (
     EvalConfig,
     ProfilerConfig,
     InferenceServiceConfig,
-    InferenceModelConfig,
+    InferenceTransformersModelConfig,
     GenerationDefaultsConfig,
     InferenceLimitsConfig,
     WorkerEndpointConfig,
     RoutingConfig,
+    EngineConfig,
+    VLLMConfig,
 )
 
 _ROUTING_STRATEGIES = {"round_robin", "least_loaded"}
+_ENGINE_TYPES = {"transformers", "vllm"}
 
 _TORCH_DTYPES = {
     "bfloat16": torch.bfloat16,
@@ -269,10 +272,10 @@ class ConfigurationManager:
             model_version=config.model_version,
         )
 
-    def get_inference_model_config(self) -> InferenceModelConfig:
-        config = self._require(self.inference_config, "inference_config_path").model
+    def get_inference_transformers_model_config(self) -> InferenceTransformersModelConfig:
+        config = self._require(self.inference_config, "inference_config_path").transformers
 
-        return InferenceModelConfig(
+        return InferenceTransformersModelConfig(
             model_path=config.model_path,
             device=config.device,
             dtype=_TORCH_DTYPES[config.dtype],
@@ -323,6 +326,126 @@ class ConfigurationManager:
             raise RuntimeError("Duplicate worker id(s) found in `workers:` configuration.")
 
         return endpoints
+
+    def get_engine_config(self) -> EngineConfig:
+        inference_config = self._require(self.inference_config, "inference_config_path")
+        config = inference_config.engine
+        limits = inference_config.limits
+
+        if config.type not in _ENGINE_TYPES:
+            raise ValueError(
+                f"Unknown engine.type {config.type!r}. Expected one of {sorted(_ENGINE_TYPES)}."
+            )
+
+        # Transformer Engine
+        if config.type != "vllm":
+            return EngineConfig(type=config.type, vllm=None)
+
+        # Rest is on VLLM engine configuration
+        vllm_section = config.get("vllm")
+        if vllm_section is None:
+            raise ValueError("engine.type is 'vllm' but no engine.vllm section is configured.")
+
+        model_id = vllm_section.get("model_id")
+        if not model_id:
+            raise ValueError(
+                "engine.vllm.model_id is required (a Hugging Face hub repo id or a local "
+                "model directory)."
+            )
+
+        if vllm_section.tensor_parallel_size != 1:
+            raise ValueError(
+                "tensor_parallel_size must be 1 in this stage (tensor parallelism is out of "
+                f"scope); got {vllm_section.tensor_parallel_size}."
+            )
+
+        dp = vllm_section.data_parallel_size
+        if not (dp == "auto" or (isinstance(dp, int) and dp > 0)):
+            raise ValueError(f"data_parallel_size must be a positive integer or 'auto'; got {dp!r}.")
+
+        if not (0 < vllm_section.gpu_memory_utilization <= 1):
+            raise ValueError("gpu_memory_utilization must be in (0, 1].")
+
+        if vllm_section.max_model_len <= 0:
+            raise ValueError("max_model_len must be > 0.")
+
+        if vllm_section.max_num_seqs <= 0:
+            raise ValueError("max_num_seqs must be > 0.")
+
+        limit_mm_per_prompt = dict(vllm_section.get("limit_mm_per_prompt") or {"image": 4, "video": 0})
+        image_limit = limit_mm_per_prompt.get("image")
+        if image_limit is not None and image_limit < limits.max_images:
+            raise ValueError(
+                f"engine.vllm.limit_mm_per_prompt.image ({image_limit}) must be >= "
+                f"limits.max_images ({limits.max_images}); vLLM would silently reject requests "
+                "the public API already accepts."
+            )
+
+        return EngineConfig(
+            type="vllm",
+            vllm=VLLMConfig(
+                model_id=model_id,
+                cache_dir=vllm_section.get("cache_dir"),
+                dtype=vllm_section.get("dtype") or "auto",
+                data_parallel_size=dp,
+                tensor_parallel_size=1,
+                gpu_memory_utilization=vllm_section.gpu_memory_utilization,
+                max_model_len=vllm_section.max_model_len,
+                max_num_seqs=vllm_section.max_num_seqs,
+                limit_mm_per_prompt=limit_mm_per_prompt,
+                mm_processor_kwargs=dict(vllm_section.get("mm_processor_kwargs") or {}),
+            ),
+        )
+
+    def get_inference_tracking_config(self) -> TrackingConfig:
+        """
+        Efficiency-metrics tracking for a serving process (latency,
+        throughput, GPU utilization) -- reuses training's TrackingConfig
+        shape, but with an inference-appropriate experiment name default.
+        Optional: absent `tracking:` section means tracking stays disabled,
+        matching the section's own `enabled` default.
+        """
+        inference_config = self._require(self.inference_config, "inference_config_path")
+        config = inference_config.get("tracking")
+
+        if config is None:
+            return TrackingConfig(enabled=False)
+
+        return TrackingConfig(
+            enabled=config.get("enabled", False),
+            mlflow_tracking_uri=config.get("mlflow_tracking_uri"),
+            mlflow_experiment_name=config.get("mlflow_experiment_name", "qwen-vl-inference"),
+            mlflow_run_name=config.get("mlflow_run_name"),
+            log_perf_metrics=config.get("log_perf_metrics", False),
+            s3_bucket=config.get("s3_bucket"),
+            s3_prefix=config.get("s3_prefix", "metrics"),
+            metrics_log_interval=config.get("metrics_log_interval", 30),
+        )
+
+    def get_inference_profiler_config(self) -> ProfilerConfig:
+        """
+        torch.profiler toggle for a serving process -- reuses training's
+        ProfilerConfig shape. `profile_ranks` is training-only (no
+        multi-rank inference) and always ignored here. Optional: absent
+        `profiler:` section means profiling stays disabled.
+        """
+        inference_config = self._require(self.inference_config, "inference_config_path")
+        config = inference_config.get("profiler")
+
+        if config is None:
+            return ProfilerConfig(enabled=False)
+
+        return ProfilerConfig(
+            enabled=config.get("enabled", False),
+            output_dir=config.get("output_dir", "results/inference_profiler"),
+            wait_steps=config.get("wait_steps", 0),
+            warmup_steps=config.get("warmup_steps", 1),
+            active_steps=config.get("active_steps", 5),
+            repeat=config.get("repeat", 1),
+            record_shapes=config.get("record_shapes", False),
+            profile_memory=config.get("profile_memory", True),
+            with_stack=config.get("with_stack", False),
+        )
 
     def get_routing_config(self) -> RoutingConfig:
         config = self._require(self.inference_config, "inference_config_path").routing

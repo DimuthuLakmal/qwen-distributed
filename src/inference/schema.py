@@ -12,12 +12,12 @@ dependency-free too.
 
 The Pydantic models in the "Worker wire contract" section below are a
 separate concern: the JSON contract between the public router
-(`src/inference/router/`) and a worker's internal API (`src/inference/api/`).
+(`src/inference/transformers/router/`) and a worker's internal API (`src/inference/transformers/worker_app/`).
 Images cross that hop base64-encoded rather than proxied as multipart,
 trading a small encode/decode cost for a simple, typed contract. They are
-intentionally distinct from the public-facing schemas in
-`src/inference/router/routes/inference.py`, which own the multipart HTTP
-contract external clients see.
+intentionally distinct from the "Public HTTP contract" section further
+below, which owns the multipart HTTP contract external clients see (shared
+by both the Transformers router and the vLLM direct app).
 """
 
 from __future__ import annotations
@@ -105,3 +105,36 @@ class WorkerStatusSchema(BaseModel):
     worker_id: str
     ready: bool
     active_requests: int
+
+
+# --- Public HTTP contract --------------------------------------------------
+# The multipart `POST /v1/generate` request/response schemas external
+# clients see. Shared by `src/inference/transformers/router/routes/inference.py`
+# (Transformers: forwards to a worker) and `src/inference/vllm/routes/inference.py`
+# (vLLM: calls InferenceService directly), so the external contract stays
+# identical regardless of backend without duplicating these definitions.
+# The bounded-upload-reading helper both apps use to read these requests
+# lives in `src/inference/http_utils.py`, not here -- this file is schema
+# definitions only.
+
+
+class GenerationOptionsSchema(BaseModel):
+    do_sample: bool | None = None
+    max_new_tokens: int | None = None
+    num_beams: int | None = None
+    temperature: float | None = None
+
+
+class GenerateRequestSchema(BaseModel):
+    prompt: str
+    system_prompt: str | None = None
+    generation: GenerationOptionsSchema | None = None
+
+
+class GenerateResponseSchema(BaseModel):
+    request_id: str
+    generated_text: str
+    model_version: str
+    input_token_count: int
+    output_token_count: int
+    latency_seconds: float

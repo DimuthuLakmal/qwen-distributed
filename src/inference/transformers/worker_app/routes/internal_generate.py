@@ -12,16 +12,15 @@ logic: it decodes the base64 image payloads and delegates everything else to
 
 from __future__ import annotations
 
-import asyncio
 import base64
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Request
 
-from src.inference.api.dependencies import get_inference_service
 from src.inference.preprocessing import RawImage
-from src.inference.service import InferenceService
 from src.inference.schema import WorkerGenerateRequestSchema, WorkerGenerateResponseSchema
+from src.inference.service import InferenceService
+from src.inference.transformers.worker_app.dependencies import get_inference_service
 
 router = APIRouter(prefix="/internal", tags=["worker-generate"])
 
@@ -45,8 +44,7 @@ async def generate(
             if value is not None
         }
 
-    response = await asyncio.to_thread(
-        service.generate,
+    response = await service.generate(
         request_id=request.state.request_id,
         prompt=payload.prompt,
         system_prompt=payload.system_prompt,

@@ -6,7 +6,7 @@ bodies (generated text).
 Must be registered *before* `RequestIDMiddleware` via `app.add_middleware`
 (Starlette applies middleware to the request in reverse-registration order,
 so the request-ID assignment needs to be the outermost/first-run middleware)
--- see `src/inference/api/app.py` and `src/inference/router/app.py`.
+-- see `src/inference/transformers/worker_app/app.py` and `src/inference/transformers/router/app.py`.
 """
 
 from __future__ import annotations

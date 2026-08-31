@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from src.inference.api.dependencies import get_inference_service, get_worker_id
-from src.inference.service import InferenceService
 from src.inference.schema import WorkerStatusSchema
+from src.inference.service import InferenceService
+from src.inference.transformers.worker_app.dependencies import get_inference_service, get_worker_id
 
 router = APIRouter(prefix="/internal", tags=["worker-status"])
 
@@ -23,6 +23,6 @@ async def status(
 ) -> WorkerStatusSchema:
     return WorkerStatusSchema(
         worker_id=worker_id,
-        ready=service is not None and service.is_ready(),
+        ready=service is not None and await service.is_ready(),
         active_requests=service.active_request_count if service is not None else 0,
     )

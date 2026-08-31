@@ -12,21 +12,28 @@ mode, `use_cache=True`, and the model placed on its configured device.
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import torch
 from transformers import AutoModelForImageTextToText, AutoTokenizer
 
-from src.config.schema import InferenceModelConfig
+from src.config.schema import InferenceTransformersModelConfig, ProfilerConfig
 from src.inference.engines.base import InferenceEngine
 from src.inference.preprocessing import build_conversation_messages
 from src.inference.schema import InferenceRequest, InferenceResponse
+from src.tracking.profiler import build_profiler
 from src.utils.logger import logger
 from src.utils.tensor_utils import move_to_device
 
 
 class TransformersQwenVLEngine(InferenceEngine):
-    def __init__(self, config: InferenceModelConfig, model_version: str) -> None:
+    def __init__(
+        self,
+        config: InferenceTransformersModelConfig,
+        model_version: str,
+        profiler_config: ProfilerConfig | None = None,
+    ) -> None:
         self.config = config
         self.model_version = model_version
         self.device = torch.device(config.device)
@@ -34,9 +41,23 @@ class TransformersQwenVLEngine(InferenceEngine):
 
         self.processor, self.model = self._load(config)
 
+        # Runs fully in-process (unlike the vLLM engine, which may spawn
+        # data-parallel engine-core subprocesses), so wrapping generate()
+        # calls in a torch.profiler here actually captures real GPU ops.
+        # `build_profiler` is a contextmanager normally used with `with`
+        # around a whole loop; entered/exited manually here since it must
+        # span this engine's whole lifetime instead.
+        self._profiler_cm = build_profiler(profiler_config or ProfilerConfig(enabled=False))
+        self.profiler = self._profiler_cm.__enter__()
+
         self._ready = True
 
-    def generate(self, request: InferenceRequest) -> InferenceResponse:
+    async def generate(self, request: InferenceRequest) -> InferenceResponse:
+        """Offload the blocking `model.generate()` call to a worker thread."""
+
+        return await asyncio.to_thread(self._generate_sync, request)
+
+    def _generate_sync(self, request: InferenceRequest) -> InferenceResponse:
         start_time = time.perf_counter()
 
         messages = build_conversation_messages(request)
@@ -67,6 +88,9 @@ class TransformersQwenVLEngine(InferenceEngine):
         with torch.inference_mode():
             generated_ids = self.model.generate(**encoded, **generation_kwargs)
 
+        if self.profiler is not None:
+            self.profiler.step()
+
         new_tokens = generated_ids[:, prompt_length:]
         decoded = self.processor.batch_decode(new_tokens, skip_special_tokens=True)
         generated_text = decoded[0].strip() if decoded else ""
@@ -83,7 +107,7 @@ class TransformersQwenVLEngine(InferenceEngine):
             latency_seconds=latency_seconds,
         )
 
-    def health(self) -> bool:
+    async def health(self) -> bool:
         return self._ready
 
     def close(self) -> None:
@@ -92,12 +116,13 @@ class TransformersQwenVLEngine(InferenceEngine):
         self._ready = False
         self.model = None
         self.processor = None
+        self._profiler_cm.__exit__(None, None, None)
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
     @staticmethod
-    def _load(config: InferenceModelConfig):
+    def _load(config: InferenceTransformersModelConfig):
         processor_kwargs: dict[str, object] = {}
         if config.min_pixels:
             processor_kwargs["min_pixels"] = config.min_pixels

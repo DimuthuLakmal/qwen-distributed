@@ -6,7 +6,7 @@ from src.inference.service import InferenceService
 def get_inference_service(request: Request) -> InferenceService:
     """
     Return the InferenceService created once during worker startup (see
-    `src/inference/api/app.py`'s lifespan). Never constructs a new
+    `src/inference/transformers/worker_app/app.py`'s lifespan). Never constructs a new
     engine/service per request.
     """
 

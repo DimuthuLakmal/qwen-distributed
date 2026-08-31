@@ -1,6 +1,6 @@
 model:
-  model_id: "Qwen/Qwen3-VL-8B-Instruct"
-  cache_dir: "/data/gpfs/projects/punim2030/huggingface/cache"        # point at scratch/gpfs, not $HOME (quota)
+  model_id: "Qwen/Qwen3.5-9B"
+  cache_dir: "/home/student.unimelb.edu.au/dkariyawasan/llm_models"        # point at scratch/gpfs, not $HOME (quota)
   dtype: "bfloat16"
   attn_implementation: "flash_attention_2"
   freeze_vision_tower: true

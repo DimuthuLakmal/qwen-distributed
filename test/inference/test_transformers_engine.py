@@ -5,17 +5,18 @@ No real weights or GPU are loaded here -- these tests only exercise the
 engine's message-building, tensor-slicing, and error-handling logic.
 """
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 
-from src.config.schema import InferenceModelConfig
+from src.config.schema import InferenceTransformersModelConfig
 from src.inference.engines.transformers import TransformersQwenVLEngine
 from src.inference.schema import GenerationConfig, InferenceRequest
 
 
-def _model_config(**overrides) -> InferenceModelConfig:
+def _model_config(**overrides) -> InferenceTransformersModelConfig:
     defaults = dict(
         model_path="fake/model/path",
         device="cpu",
@@ -25,7 +26,7 @@ def _model_config(**overrides) -> InferenceModelConfig:
         max_pixels=0,
     )
     defaults.update(overrides)
-    return InferenceModelConfig(**defaults)
+    return InferenceTransformersModelConfig(**defaults)
 
 
 class _FakeProcessor:
@@ -81,6 +82,7 @@ def _build_engine_with_fakes() -> TransformersQwenVLEngine:
     engine.device = torch.device("cpu")
     engine.processor = _FakeProcessor()
     engine.model = _FakeModel()
+    engine.profiler = None
     engine._ready = True
     return engine
 
@@ -93,7 +95,7 @@ def test_generate_slices_prompt_tokens_and_returns_canonical_response():
         generation=GenerationConfig(max_new_tokens=16, num_beams=1, do_sample=False),
     )
 
-    response = engine.generate(request)
+    response = asyncio.run(engine.generate(request))
 
     assert response.request_id == "req-1"
     assert response.generated_text == "a cat sitting on a mat"
@@ -116,7 +118,7 @@ def test_generate_forwards_temperature_only_when_sampling():
         generation=GenerationConfig(do_sample=True, temperature=0.7, max_new_tokens=8),
     )
 
-    engine.generate(request)
+    asyncio.run(engine.generate(request))
 
     assert engine.model.generate_kwargs["do_sample"] is True
     assert engine.model.generate_kwargs["temperature"] == 0.7
@@ -124,10 +126,10 @@ def test_generate_forwards_temperature_only_when_sampling():
 
 def test_health_reflects_ready_state():
     engine = _build_engine_with_fakes()
-    assert engine.health() is True
+    assert asyncio.run(engine.health()) is True
 
     engine._ready = False
-    assert engine.health() is False
+    assert asyncio.run(engine.health()) is False
 
 
 def test_load_wraps_processor_failure_in_clear_runtime_error():
@@ -167,6 +169,6 @@ def test_load_sets_eval_mode_use_cache_and_engine_becomes_ready():
     ):
         engine = TransformersQwenVLEngine(_model_config(), model_version="v1")
 
-    assert engine.health() is True
+    assert asyncio.run(engine.health()) is True
     assert fake_model.eval_called is True
     assert fake_model.config.use_cache is True

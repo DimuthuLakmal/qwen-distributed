@@ -3,7 +3,7 @@ All exception types raised anywhere in the inference module -- validation,
 worker service, and router/worker-communication errors alike -- live here so
 error handling has a single source of truth. `src/inference/middleware/error_handler.py`
 maps every type below to an HTTP status code in one place and is shared by
-both the worker (`src/inference/api/`) and the router (`src/inference/router/`)
+both the worker (`src/inference/transformers/worker_app/`) and the router (`src/inference/transformers/router/`)
 apps; neither process raises all of these, but registering a handler for a
 type that's never thrown there is harmless.
 """

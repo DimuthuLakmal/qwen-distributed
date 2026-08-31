@@ -18,7 +18,7 @@ from src.inference.exception import (
     WorkerRequestRejectedError,
     WorkerUnavailableError,
 )
-from src.inference.router.registry import WorkerDescriptor
+from src.inference.transformers.router.registry import WorkerDescriptor
 from src.inference.schema import (
     WorkerGenerateRequestSchema,
     WorkerGenerateResponseSchema,

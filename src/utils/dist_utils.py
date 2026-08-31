@@ -30,3 +30,9 @@ def barrier() -> None:
 
 def is_distributed() -> bool:
     return dist.is_available() and dist.is_initialized()
+
+
+def visible_gpu_count() -> int:
+    """Number of GPUs visible to this process (respects CUDA_VISIBLE_DEVICES)."""
+
+    return torch.cuda.device_count()
