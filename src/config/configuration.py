@@ -18,7 +18,11 @@ from src.config.schema import (
     InferenceModelConfig,
     GenerationDefaultsConfig,
     InferenceLimitsConfig,
+    WorkerEndpointConfig,
+    RoutingConfig,
 )
+
+_ROUTING_STRATEGIES = {"round_robin", "least_loaded"}
 
 _TORCH_DTYPES = {
     "bfloat16": torch.bfloat16,
@@ -304,4 +308,34 @@ class ConfigurationManager:
             max_image_bytes=config.max_image_bytes,
             max_image_pixels=config.max_image_pixels,
             max_new_tokens=config.max_new_tokens,
+        )
+
+    def get_worker_endpoints_config(self) -> list[WorkerEndpointConfig]:
+        config = self._require(self.inference_config, "inference_config_path").workers
+
+        if not config:
+            raise RuntimeError("inference.yaml must define at least one entry under `workers:`.")
+
+        endpoints = [WorkerEndpointConfig(worker_id=w.id, url=w.url) for w in config]
+
+        worker_ids = [endpoint.worker_id for endpoint in endpoints]
+        if len(worker_ids) != len(set(worker_ids)):
+            raise RuntimeError("Duplicate worker id(s) found in `workers:` configuration.")
+
+        return endpoints
+
+    def get_routing_config(self) -> RoutingConfig:
+        config = self._require(self.inference_config, "inference_config_path").routing
+
+        if config.strategy not in _ROUTING_STRATEGIES:
+            raise RuntimeError(
+                f"Unknown routing.strategy {config.strategy!r}. "
+                f"Expected one of {sorted(_ROUTING_STRATEGIES)}."
+            )
+
+        return RoutingConfig(
+            strategy=config.strategy,
+            connect_timeout_seconds=config.connect_timeout_seconds,
+            read_timeout_seconds=config.read_timeout_seconds,
+            status_poll_timeout_seconds=config.status_poll_timeout_seconds,
         )

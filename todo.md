@@ -1,500 +1,627 @@
-# Stage 1 TODO — Correct End-to-End Inference Service
+# Stage 1 TODO — Correct Multi-GPU Replicated Inference Service
 
 ## Goal
 
-Build the first production-shaped inference path for the already-trained and exported Qwen-VL model.
+Build the first production-shaped inference service for the already-trained and exported Qwen-VL model.
 
 The completed Stage 1 must support:
 
 ```text
-exported Hugging Face Qwen-VL artifact
-  -> model loaded once
-  -> Transformers inference engine
-  -> InferenceService
-  -> FastAPI endpoint
-  -> image + prompt
-  -> generated response
+                         Public API
+                             |
+                             v
+                      Replica Router
+                             |
+          +------------------+------------------+
+          |                  |                  |
+          v                  v                  v
+      GPU Worker 0       GPU Worker 1       GPU Worker 2
+      Qwen replica       Qwen replica       Qwen replica
+          |                  |                  |
+        GPU 0              GPU 1              GPU 2
 ```
 
-The focus is **correctness, clean interfaces, testability, and lifecycle management**.
+Each GPU worker owns **one complete model replica** when the model fits on one GPU. The same service must also run with one worker/GPU for local development.
 
-Do not implement vLLM, continuous batching, streaming, Kubernetes, or advanced observability in this stage.
+Stage 1 is divided into:
+
+```text
+Stage 1A — single-worker correctness
+Stage 1B — multi-GPU replication and routing
+```
+
+Do not implement vLLM, continuous batching, tensor parallelism, streaming, Kubernetes, or advanced observability in this stage.
 
 ---
+
+# Stage 1A — Single-Worker Correctness
 
 ## Task 1 — Inspect the Existing Repository
 
-- [x] Read the existing project structure before adding inference code.
-- [x] Identify the existing configuration-loading mechanism and config dataclasses/schemas.
-- [x] Identify existing logging and utility modules that should be reused.
-- [x] Identify how the exported Hugging Face model path/version is currently represented.
-- [x] Inspect the training/evaluation model-loading code for reusable model/processor settings.
-- [x] Inspect existing test conventions and dependency management.
-- [x] Confirm whether FastAPI, Uvicorn, Pillow, and required inference dependencies already exist.
-- [x] Record any required dependency additions before implementing service code.
-- [x] Do not change training/evaluation code during this task unless a concrete shared-interface problem is identified.
+- [ ] Read the existing project structure before adding inference code.
+- [ ] Identify the existing configuration-loading mechanism and typed config classes.
+- [ ] Identify logging/utilities that should be reused.
+- [ ] Identify how exported Hugging Face model artifacts are represented.
+- [ ] Inspect evaluation model-loading code for reusable model/processor settings.
+- [ ] Inspect existing test conventions and dependency management.
+- [ ] Confirm whether FastAPI, Uvicorn, an async HTTP client, Pillow, and inference dependencies exist.
+- [ ] Record required dependency additions before implementation.
+- [ ] Avoid modifying working training/evaluation code unless a shared abstraction truly requires it.
 
-### Task 1 completion criteria
+### Completion criteria
 
-- Existing conventions are understood.
-- Planned inference files fit the repository instead of duplicating existing abstractions.
-- Any necessary structural deviations from `CLAUDE.md` are documented in this TODO before implementation.
-
-**Structural deviations from `CLAUDE.md`'s literal file tree (intentional, per its own "avoid duplicate
-config systems" rule):**
-- No `src/inference/config.py`. Inference config dataclasses live in `src/config/schema.py`
-  (`InferenceServiceConfig`, `InferenceModelConfig`, `GenerationDefaultsConfig`,
-  `InferenceLimitsConfig`) and are loaded via new `get_inference_*_config()` methods on the
-  existing `ConfigurationManager`, exactly like every other config area in this repo.
-- `ConfigurationManager.__init__`'s five yaml-path arguments are now all optional (previously four
-  were mandatory), so it can be constructed from `inference.yaml` alone. Backward compatible --
-  existing `train.py`/`evaluate.py` call sites are unaffected (see `test/inference/test_config.py::test_existing_training_config_paths_still_work`).
-- The Transformers engine (`src/inference/engines/transformers.py`) does not call
-  `src/models/qwen_vl.py::build_qwen_vl` -- that builder is training-oriented (freezes modules,
-  enables gradient checkpointing, forces `use_cache=False`, leaves the model off-device for FSDP).
-  The engine loads the processor/model itself with inference-appropriate settings instead
-  (`eval()`, `use_cache=True`, placed on its configured device). `build_qwen_vl` itself is
-  unchanged.
-- Tests live under `test/inference/` and `test/api/` (the repo uses a flat `test/` directory, not
-  `tests/`, so this only adds subdirectories, matching existing convention).
+- Existing project conventions are understood.
+- Inference code integrates cleanly rather than duplicating abstractions.
+- Any deviations from `CLAUDE.md` are documented before implementation.
 
 ---
 
-## Task 2 — Add Inference Configuration
+## Task 2 — Add Inference and Worker Configuration
 
-- [x] Add typed inference configuration using the project's existing config system.
-- [x] Add an `inference.yaml` or equivalent configuration file.
-- [x] Include model artifact path.
-- [x] Include model/version identifier.
-- [x] Include device selection.
-- [x] Include inference dtype.
-- [x] Include attention implementation if supported.
-- [x] Include default generation settings.
-- [x] Include server host and port.
-- [x] Include request limits for prompt length, image count, image size, and maximum output tokens.
-- [x] Ensure request-level generation values can only reduce/stay within server limits, not bypass them.
-- [x] Add configuration validation tests.
+- [ ] Add typed inference configuration using the existing config system.
+- [ ] Add `inference.yaml` or equivalent.
+- [ ] Include exported model path and model/version ID.
+- [ ] Include inference dtype/device and attention implementation where supported.
+- [ ] Include generation defaults and hard generation limits.
+- [ ] Include public router host/port.
+- [ ] Include worker IDs/endpoints.
+- [ ] Include prompt/image/output limits.
+- [ ] Ensure request-level values cannot exceed server limits.
+- [ ] Add configuration validation tests.
 
-### Minimum configuration areas
+### Suggested shape
 
-```text
-service
-model
-generation
-limits
+```yaml
+service:
+  host: "0.0.0.0"
+  port: 8000
+
+model:
+  id: "qwen-vl-v001"
+  path: "/models/qwen-vl-v001"
+  dtype: "bfloat16"
+  device: "cuda"
+  attn_implementation: "flash_attention_2"
+
+generation:
+  max_new_tokens: 256
+  do_sample: false
+
+limits:
+  max_prompt_tokens: 4096
+  max_images: 4
+  max_image_bytes: 15728640
+  max_image_pixels: 16000000
+  max_new_tokens: 512
+
+workers:
+  - id: "gpu-0"
+    url: "http://127.0.0.1:8100"
+  - id: "gpu-1"
+    url: "http://127.0.0.1:8101"
+
+routing:
+  strategy: "round_robin"
 ```
 
-### Task 2 completion criteria
+Prefer process-level GPU assignment with `CUDA_VISIBLE_DEVICES`; do not make the public router responsible for CUDA placement.
 
-- Service behavior can be changed without editing source constants.
-- Invalid critical configuration fails during startup with a clear error.
+### Completion criteria
+
+- Single- and multi-worker deployments are configuration-driven.
+- Invalid critical configuration fails clearly at startup.
 
 ---
 
 ## Task 3 — Define Canonical Inference Schemas
 
-- [x] Create internal `GenerationConfig`.
-- [x] Create internal `InferenceRequest`.
-- [x] Create internal `InferenceResponse`.
-- [x] Include request ID.
-- [x] Include prompt.
-- [x] Include optional system prompt.
-- [x] Include image inputs in a form appropriate for the service layer.
-- [x] Include generation options.
-- [x] Include response model/version.
-- [x] Include input token count.
-- [x] Include output token count.
-- [x] Include total inference latency.
-- [x] Keep HTTP/Pydantic-specific schemas separate from internal domain schemas where that improves boundaries.
-- [x] Add unit tests for schema validation.
+- [ ] Create internal `GenerationConfig`.
+- [ ] Create internal `InferenceRequest`.
+- [ ] Create internal `InferenceResponse`.
+- [ ] Include request ID, prompt, optional system prompt, images, and generation options.
+- [ ] Include model/version, input/output token counts, and latency in responses.
+- [ ] Define worker status schema.
+- [ ] Define worker generation request/response contract.
+- [ ] Keep public HTTP/Pydantic schemas separate from internal schemas where useful.
+- [ ] Add validation tests.
 
-### Task 3 completion criteria
+### Completion criteria
 
-- The service and engine communicate using stable internal objects rather than HTTP request objects.
+- Public API, router, worker client, and worker service communicate through explicit contracts.
 
 ---
 
 ## Task 4 — Implement Input Validation and Multimodal Preprocessing
 
-- [x] Create an inference preprocessor/validator.
-- [x] Validate prompt presence and configured prompt limits.
-- [x] Validate image count.
-- [x] Validate uploaded MIME/media type.
-- [x] Validate configured maximum image byte size.
-- [x] Validate decoded image dimensions/pixel limits.
-- [x] Normalize images to a format accepted by the Qwen processor.
-- [x] Build Qwen-compatible multimodal conversation messages.
-- [x] Support optional system prompt.
-- [x] Ensure generation parameters are bounded by server configuration.
-- [x] Do not fetch arbitrary user-provided remote URLs.
-- [x] Avoid unnecessary image copies where practical.
-- [x] Add unit tests for valid and invalid inputs.
+- [ ] Validate prompt presence and limits.
+- [ ] Validate image count, MIME/media type, bytes, dimensions, and total pixels.
+- [ ] Normalize images into Qwen-compatible inputs.
+- [ ] Build Qwen multimodal messages.
+- [ ] Support optional system prompt.
+- [ ] Bound generation parameters by service limits.
+- [ ] Do not fetch arbitrary user-provided remote URLs.
+- [ ] Avoid unnecessary image copies where practical.
+- [ ] Add unit tests.
 
-### Required test cases
+### Required tests
 
-- [x] text + valid image,
-- [x] missing prompt,
-- [x] unsupported image type,
-- [x] oversized image payload,
-- [x] excessive image count,
-- [x] excessive pixel dimensions,
-- [x] excessive `max_new_tokens`,
-- [x] system prompt present,
-- [x] multiple images if Stage 1 implementation supports them.
+- [ ] valid text + image,
+- [ ] missing prompt,
+- [ ] unsupported image type,
+- [ ] oversized payload,
+- [ ] excessive image count,
+- [ ] excessive pixel dimensions,
+- [ ] excessive `max_new_tokens`,
+- [ ] optional system prompt,
+- [ ] multiple images if supported.
 
-### Task 4 completion criteria
+### Completion criteria
 
-- Invalid requests fail before GPU/model execution.
-- Qwen-specific message construction is not implemented inside API routes.
+- Invalid requests fail before model execution.
+- Qwen-specific preprocessing is outside API route handlers.
 
 ---
 
 ## Task 5 — Create the Inference Engine Interface
 
-- [x] Add an abstract `InferenceEngine`.
-- [x] Define generation behavior.
-- [x] Define readiness/health behavior.
-- [x] Keep the interface independent of Hugging Face model classes.
-- [x] Decide and document whether the interface is async or sync internally.
-- [x] Ensure the interface can later support a vLLM implementation without changing the service/API contract.
-- [x] Add a fake/mock engine for tests.
+- [ ] Add abstract `InferenceEngine`.
+- [ ] Define generation and readiness behavior.
+- [ ] Keep interface independent of Hugging Face model classes.
+- [ ] Decide/document sync vs async boundary.
+- [ ] Ensure a future vLLM engine can satisfy the same contract.
+- [ ] Add fake/mock engine for tests.
 
-### Task 5 completion criteria
+### Completion criteria
 
-- `InferenceService` can operate against the fake engine without importing Transformers.
+- `InferenceService` can run against a fake engine without importing Transformers.
 
 ---
 
 ## Task 6 — Implement the Transformers Qwen-VL Engine
 
-- [x] Load the exported Hugging Face processor once during engine initialization.
-- [x] Load the exported Qwen-VL model once during engine initialization.
-- [x] Use configured dtype/device.
-- [x] Set the model to `eval()`.
-- [x] Ensure no gradient state is created during generation.
-- [x] Apply the Qwen multimodal chat template correctly.
-- [x] Use `add_generation_prompt=True`.
-- [x] Convert messages/images into processor/model inputs.
-- [x] Move tensor inputs to the configured device safely.
-- [x] Run generation inside `torch.inference_mode()`.
-- [x] Use deterministic generation by default.
-- [x] Respect validated generation limits.
-- [x] Remove prompt tokens before decoding generated output.
-- [x] Decode only the generated continuation.
-- [x] Calculate input/output token counts.
-- [x] Measure inference latency.
-- [x] Return a canonical `InferenceResponse`.
-- [x] Implement engine readiness.
-- [x] Produce clear startup errors when model loading fails.
-- [x] Add engine unit tests with mocked model/processor where appropriate.
-- [x] Add an optional GPU smoke test that is excluded from normal CPU-only CI.
+- [ ] Load processor once during worker startup.
+- [ ] Load exported Qwen-VL model once during worker startup.
+- [ ] Use configured dtype/device.
+- [ ] Set `model.eval()`.
+- [ ] Use `torch.inference_mode()`.
+- [ ] Apply Qwen multimodal chat template with `add_generation_prompt=True`.
+- [ ] Convert multimodal content into processor/model inputs.
+- [ ] Move tensors to the worker GPU safely.
+- [ ] Use deterministic generation by default.
+- [ ] Respect generation limits.
+- [ ] Decode generated continuation only.
+- [ ] Calculate token counts and latency.
+- [ ] Implement readiness and clear startup failures.
+- [ ] Add mocked engine tests.
+- [ ] Add optional real-GPU smoke test excluded from CPU CI.
 
-### Stage 1 generation constraints
+### Critical GPU rule
 
-- No streaming.
-- No continuous batching.
-- No custom scheduler.
-- No FSDP.
-- No per-request model loading.
+The worker must work with:
 
-### Task 6 completion criteria
+```bash
+CUDA_VISIBLE_DEVICES=<physical_gpu_id>
+```
 
-- A known exported model can perform a real image+text generation through the engine.
+and may use:
+
+```python
+torch.device("cuda:0")
+```
+
+internally.
+
+Do not use `device_map="auto"`, DDP, FSDP, `torch.nn.DataParallel`, or multiple model replicas in one worker process.
+
+### Completion criteria
+
+- One worker process can serve the exported Qwen-VL model on one GPU.
 
 ---
 
 ## Task 7 — Implement Postprocessing
 
-- [x] Create a postprocessing component/function rather than embedding cleanup in API code.
-- [x] Normalize generated text only where required.
-- [x] Do not remove meaningful model output aggressively.
-- [x] Keep task-specific structured-output parsing extensible for later downstream requirements.
-- [x] Add unit tests.
-
-### Task 7 completion criteria
-
-- Engine output can be postprocessed independently from HTTP handling.
+- [ ] Add a postprocessing component/function.
+- [ ] Keep cleanup out of API route code.
+- [ ] Preserve meaningful generated output.
+- [ ] Leave extension points for structured-output parsing.
+- [ ] Add tests.
 
 ---
 
-## Task 8 — Implement `InferenceService`
+## Task 8 — Implement Worker `InferenceService`
 
-- [x] Create `InferenceService`.
-- [x] Accept the engine through dependency injection.
-- [x] Coordinate validation/preprocessing, engine execution, and postprocessing.
-- [x] Keep model/runtime-specific code out of the service.
-- [x] Define clear exceptions for expected inference/service failures.
-- [x] Ensure request ID is preserved end-to-end.
-- [x] Add unit tests using the fake engine.
+- [ ] Create `InferenceService` with engine dependency injection.
+- [ ] Coordinate validation/preprocessing, generation, and postprocessing.
+- [ ] Preserve request ID.
+- [ ] Keep runtime-specific code out of service layer.
+- [ ] Define service exceptions.
+- [ ] Track active request count safely for worker status.
+- [ ] Add tests using fake engine.
 
-### Task 8 completion criteria
+### Completion criteria
 
-- The complete application path can be tested without a GPU or real Qwen model.
+- Worker service is testable without a GPU.
 
 ---
 
-## Task 9 — Implement the FastAPI Application
+## Task 9 — Implement Internal GPU Worker API
 
-- [x] Create the FastAPI app factory or equivalent startup module.
-- [x] Load/create the inference service during application startup/lifespan.
-- [x] Ensure model loading occurs once per serving process.
-- [x] Add dependency injection for the initialized service.
+- [x] Add worker-only FastAPI app.
+- [x] Add `GET /internal/health/live`.
+- [x] Add `GET /internal/health/ready`.
+- [x] Add `GET /internal/status`.
+- [x] Add `POST /internal/generate`.
+- [x] Initialize model/engine once during app lifespan.
+- [x] Expose worker ID, readiness, and `active_requests`.
+- [x] Do not build a custom request queue only for Stage 1.
+- [x] Map expected errors cleanly and sanitize unexpected errors.
+- [ ] Add worker API tests with fake engine. _(deferred: no local GPU this pass; test-writing explicitly out of scope for this change)_
+
+### Suggested status response
+
+```json
+{
+  "worker_id": "gpu-0",
+  "ready": true,
+  "active_requests": 1
+}
+```
+
+### Completion criteria
+
+- Worker API works independently of the public router.
+
+---
+
+## Task 10 — Add Worker Entrypoint
+
+- [x] Create `src/pipeline/worker.py`.
+- [x] Load inference/worker configuration.
+- [x] Configure logging.
+- [x] Start internal worker FastAPI app.
+- [x] Support worker ID/port arguments or environment variables.
+- [x] Document one-process-per-GPU usage.
+- [x] Ensure graceful startup/shutdown.
+
+### Required examples
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m src.pipeline.worker   --config configs/inference.yaml   --worker-id gpu-0   --port 8100
+```
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -m src.pipeline.worker   --config configs/inference.yaml   --worker-id gpu-1   --port 8101
+```
+
+### Completion criteria
+
+- Separate workers can each bind to a distinct physical GPU while using `cuda:0` internally.
+
+---
+
+# Stage 1B — Multi-GPU Replica Routing
+
+## Task 11 — Implement Worker Client
+
+- [x] Create a worker client abstraction used by the public router.
+- [x] Implement health/status requests and generation forwarding.
+- [x] Add configurable connect/read timeouts.
+- [x] Reuse persistent HTTP connections.
+- [x] Propagate request ID.
+- [x] Convert network/worker failures into typed router errors.
+- [ ] Add tests with mocked HTTP responses. _(deferred: no local GPU this pass; test-writing explicitly out of scope for this change)_
+
+### Completion criteria
+
+- HTTP client calls are centralized and testable.
+
+---
+
+## Task 12 — Implement Worker Registry
+
+- [x] Build worker registry from configuration.
+- [x] Store worker IDs/endpoints and last-known readiness.
+- [x] Support temporarily marking failed workers unavailable.
+- [x] Avoid hard-coded worker count.
+- [ ] Add tests. _(deferred: no local GPU this pass; test-writing explicitly out of scope for this change)_
+
+### Completion criteria
+
+- Router can operate over any configured number of workers.
+
+---
+
+## Task 13 — Implement Replica Routing Interface
+
+- [x] Add `ReplicaRouter` abstraction.
+- [x] Keep routing independent of Qwen/Transformers.
+- [x] Implement concurrency-safe round-robin routing first.
+- [x] Exclude unhealthy/unready workers.
+- [x] Return clear no-healthy-worker errors.
+- [ ] Add tests. _(deferred: no local GPU this pass; test-writing explicitly out of scope for this change)_
+
+### Required routing test
+
+With healthy workers `gpu-0`, `gpu-1`, `gpu-2`, sequential routing should cycle:
+
+```text
+gpu-0 -> gpu-1 -> gpu-2 -> gpu-0
+```
+
+### Completion criteria
+
+- Requests are assigned across replicas without model/API coupling.
+
+---
+
+## Task 14 — Optional Least-Loaded Router
+
+Implement only if it remains small and clean after worker status exists.
+
+- [x] Add `least_loaded` strategy using `active_requests`.
+- [x] Prefer healthy worker with lowest active count.
+- [x] Define deterministic tie-breaking.
+- [ ] Add tests. _(deferred: no local GPU this pass; test-writing explicitly out of scope for this change)_
+- [x] Make strategy configurable.
+
+Do not add token-cost estimation or continuous batching.
+
+---
+
+## Task 15 — Implement Public Router/API Service
+
+- [x] Create public FastAPI application.
 - [x] Add `GET /health/live`.
 - [x] Add `GET /health/ready`.
 - [x] Add `POST /v1/generate`.
-- [x] Use clear request/response Pydantic schemas.
-- [x] Support image upload in a safe initial API contract.
-- [x] Return correct HTTP status codes for validation failures.
-- [x] Map unexpected inference errors to sanitized server errors.
-- [x] Do not expose stack traces.
-- [x] Add request ID middleware or equivalent request ID handling.
-- [x] Do not log raw image bytes.
-- [x] Do not log raw prompts/responses by default.
-- [x] Add API tests using FastAPI's test client and the fake engine.
+- [x] Public router must not load Qwen model weights.
+- [x] Validate/parse public requests.
+- [x] Select healthy worker via `ReplicaRouter`.
+- [x] Forward using `WorkerClient`.
+- [x] Preserve request ID end-to-end.
+- [x] Mark failed workers unavailable as appropriate.
+- [x] Decide/document retry policy; do not blindly retry partially completed generation. (see `docs/serving.md` "Retry policy")
+- [x] Return HTTP 503 when no workers are available.
+- [x] Add request ID handling/middleware.
+- [x] Do not log raw images/prompts/responses.
+- [ ] Add public API integration tests with fake workers. _(deferred: no local GPU this pass; test-writing explicitly out of scope for this change)_
 
-### Health behavior
+### Readiness semantics
 
-`/health/live`:
-- succeeds when the process/API is alive.
+Public `/health/ready` is ready when at least one configured worker is healthy and ready, unless stricter semantics are explicitly configured.
 
-`/health/ready`:
-- succeeds only when the engine/model is initialized and ready.
+### Completion criteria
 
-### Task 9 completion criteria
-
-- API integration tests run without requiring a GPU.
-- Route handlers contain no Qwen/tokenizer/generation implementation logic.
+- Public API continues serving when one of several workers becomes unavailable.
+- Public API contains no tokenizer/model/CUDA logic.
 
 ---
 
-## Task 10 — Add Service Entrypoint
+## Task 16 — Add Public Router Entrypoint
 
-- [x] Create `src/pipeline/serve.py` or adapt to existing pipeline conventions.
-- [x] Load inference configuration.
+- [x] Create/adapt `src/pipeline/serve.py`.
+- [x] Load public router configuration.
 - [x] Configure logging.
-- [x] Start the FastAPI/Uvicorn service.
-- [x] Ensure graceful cleanup of engine resources where applicable.
-- [x] Keep CLI/server bootstrap concerns out of `api/app.py`.
-- [x] Add an example launch command to documentation.
-
-### Example desired usage
+- [x] Start public FastAPI/Uvicorn process.
+- [x] Do not load model weights.
+- [x] Document launch command.
 
 ```bash
 python -m src.pipeline.serve --config configs/inference.yaml
 ```
 
-or the repository's equivalent standard.
+---
 
-### Task 10 completion criteria
+## Task 17 — Add Local Multi-GPU Launch Support
 
-- A developer can start the service from a documented command using an exported model path.
+Use the simplest mechanism appropriate for the repository: shell script, documented commands, small launcher, or process supervisor config.
+
+- [x] Explicitly map one worker process to one physical GPU.
+- [x] Prefer `CUDA_VISIBLE_DEVICES`.
+- [x] Start one worker port per replica.
+- [x] Start public router separately.
+- [x] Do not use `uvicorn --workers N` as the GPU replication mechanism.
+- [x] Add clean shutdown instructions.
+- [x] Document expected process topology.
+
+### Example
+
+```text
+router      :8000   CPU process
+worker-0    :8100   CUDA_VISIBLE_DEVICES=0
+worker-1    :8101   CUDA_VISIBLE_DEVICES=1
+worker-2    :8102   CUDA_VISIBLE_DEVICES=2
+worker-3    :8103   CUDA_VISIBLE_DEVICES=3
+```
+
+### Completion criteria
+
+- Replicated serving can be launched without source changes.
 
 ---
 
-## Task 11 — Add Baseline Observability
+## Task 18 — Baseline Observability
 
-- [x] Log request ID.
-- [x] Log model/version.
-- [x] Log request success/failure.
-- [x] Log total latency.
-- [x] Log input token count.
-- [x] Log output token count.
-- [x] Ensure sensitive request content is not logged by default.
-- [x] Ensure duplicate logs are not produced unnecessarily.
-- [x] Keep metrics integration extensible for Stage 3.
+Public router logs:
 
-### Task 11 completion criteria
+- [x] request ID,
+- [x] selected worker ID,
+- [x] success/failure,
+- [x] router/total latency.
 
-- A failed request can be traced using its request ID without exposing user content.
+Worker logs:
+
+- [x] request ID,
+- [x] worker ID,
+- [x] model version,
+- [x] active request count,
+- [x] inference latency,
+- [x] input/output token counts,
+- [x] success/failure.
+
+Privacy/security:
+
+- [x] no raw image bytes,
+- [x] no raw prompts/responses by default,
+- [x] no secrets.
+
+Do not add a full metrics stack yet unless already present.
+
+### Completion criteria
+
+- A request can be traced from public router to the selected GPU worker.
 
 ---
 
-## Task 12 — End-to-End Verification
+## Task 19 — Failure and Routing Tests
 
-- [~] Run all existing training/evaluation tests relevant to regression safety. (test collection verified clean -- see Known limitations)
-- [x] Run all new inference unit tests.
-- [x] Run all API integration tests.
-- [~] Run lint/type/static checks used by the repository. (none configured beyond pytest -- see Known limitations)
-- [ ] Start the service locally/within the target environment. (deferred to a compute node -- see Known limitations)
-- [~] Verify `/health/live`. (verified via FastAPI TestClient, not a live process)
-- [~] Verify `/health/ready`. (verified via FastAPI TestClient, not a live process)
-- [ ] Send at least one real image+prompt request to `/v1/generate`. (deferred to a compute node)
-- [ ] Confirm a valid generated response. (deferred to a compute node)
-- [~] Confirm the model was loaded only once. (verified by design/tests -- lifespan calls engine_factory exactly once; not observed on a live GPU process)
-- [x] Confirm invalid requests are rejected before model execution.
-- [x] Confirm no raw image/prompt content appears in normal logs.
-- [ ] Record basic latency and GPU memory usage from the smoke test for reference only; do not optimize yet. (deferred to a compute node)
+Add integration tests for:
 
-### Task 12 completion criteria
+- [ ] all workers healthy,
+- [ ] one worker unhealthy,
+- [ ] worker becomes unavailable after startup,
+- [ ] no workers healthy,
+- [ ] worker timeout,
+- [ ] worker inference error,
+- [ ] round-robin sequence,
+- [ ] least-loaded selection if implemented,
+- [ ] request ID propagation,
+- [ ] public readiness with partial worker availability.
 
-- The baseline end-to-end inference path works with the exported Qwen-VL artifact.
+### Completion criteria
+
+- Failure behavior is deterministic and documented.
+
+---
+
+## Task 20 — Real Multi-GPU Smoke Test
+
+When multi-GPU hardware is available:
+
+- [ ] Launch at least two workers on distinct GPUs.
+- [ ] Verify each worker sees only its assigned GPU.
+- [ ] Verify each worker loads exactly one full model replica.
+- [ ] Verify both workers become ready.
+- [ ] Send multiple requests through public API.
+- [ ] Confirm requests are distributed across both workers.
+- [ ] Confirm both GPUs execute inference.
+- [ ] Record GPU memory per replica.
+- [ ] Stop one worker and confirm service continues through the other.
+- [ ] Restart the worker and confirm it can rejoin routing.
+
+Do not optimize performance yet.
+
+### Completion criteria
+
+- Real hardware demonstrates model replication and request distribution.
+
+---
+
+## Task 21 — Regression and End-to-End Verification
+
+- [ ] Run inference/routing/API tests.
+- [ ] Run relevant existing training/evaluation tests.
+- [ ] Run repository lint/type/static checks.
+- [ ] Verify public and worker health/readiness endpoints.
+- [ ] Send a real image+prompt through the public API.
+- [ ] Confirm generated response.
+- [ ] Confirm invalid requests fail before GPU execution where applicable.
+- [ ] Confirm no raw prompt/image content appears in normal logs.
+- [ ] Confirm public router holds no Qwen weights.
+- [ ] Confirm model loading occurs once per worker process.
+
+### Completion criteria
+
+- Stage 1A and Stage 1B both work end-to-end.
 - Existing training/evaluation behavior remains intact.
 
 ---
 
-## Out of Scope for Stage 1
+# Out of Scope for Stage 1
 
-Do **not** implement these items yet:
+Do **not** implement yet:
 
-- [ ] vLLM engine,
+- [ ] vLLM,
 - [ ] continuous/in-flight batching,
-- [ ] request scheduler/queue,
-- [ ] token streaming,
+- [ ] token-aware routing,
+- [ ] custom GPU scheduler,
+- [ ] streaming,
 - [ ] SSE/WebSockets,
 - [ ] tensor parallelism,
+- [ ] pipeline parallelism,
 - [ ] FSDP inference,
-- [ ] multi-GPU serving,
 - [ ] quantized inference,
-- [ ] Redis/Kafka queues,
-- [ ] arbitrary remote image URLs,
-- [ ] authentication system,
-- [ ] advanced rate limiting,
-- [ ] Prometheus/OpenTelemetry integration,
 - [ ] Kubernetes,
 - [ ] autoscaling,
+- [ ] Redis/Kafka queues,
+- [ ] arbitrary remote image URL fetching,
+- [ ] advanced authentication/rate limiting,
+- [ ] Prometheus/OpenTelemetry unless already present,
 - [ ] canary deployment,
 - [ ] model registry integration.
 
-These belong to later stages after Stage 1 has been reviewed.
-
 ---
 
-## Review
+# Review
 
-### Files added/changed
+Complete only after all Stage 1 tasks are finished.
 
-**New:**
-- `configs/inference.yaml`
-- `src/inference/__init__.py`, `schema.py`, `preprocessing.py`, `postprocessing.py`, `service.py`
-- `src/inference/engines/__init__.py`, `base.py`, `fake.py`, `transformers.py`
-- `src/api/__init__.py`, `app.py`, `dependencies.py`
-- `src/api/routes/__init__.py`, `health.py`, `inference.py`
-- `src/api/middleware/__init__.py`, `request_id.py`, `logging.py`, `error_handler.py`
-- `src/pipeline/serve.py`
-- `requirements-inference.txt`
-- `test/inference/test_config.py`, `test_schema.py`, `test_preprocessing.py`, `test_fake_engine.py`,
-  `test_transformers_engine.py`, `test_transformers_engine_gpu.py`, `test_postprocessing.py`,
-  `test_service.py`
-- `test/api/test_health.py`, `test_generate.py`
+## Files added/changed
 
-**Changed:**
-- `src/config/schema.py` -- added `InferenceServiceConfig`, `InferenceModelConfig`,
-  `GenerationDefaultsConfig`, `InferenceLimitsConfig`.
-- `src/config/configuration.py` -- made all `ConfigurationManager.__init__` yaml-path arguments
-  optional (backward compatible), added a `_require()` guard used by every getter, added
-  `get_inference_service_config()`, `get_inference_model_config()`,
-  `get_generation_defaults_config()` (also validates `generation.max_new_tokens <=
-  limits.max_new_tokens` at load time), `get_inference_limits_config()`.
+_To be completed by Claude Code._
 
-No training/evaluation behavior was changed; `build_qwen_vl`, `export_huggingface_model`, the
-trainer, evaluator, and data pipeline are untouched.
+## Architecture implemented
 
-### Architecture implemented
+_To be completed by Claude Code._
 
+## Single-worker verification
+
+_To be completed by Claude Code._
+
+## Multi-GPU replication verification
+
+Include worker IDs, GPU mapping, model memory per GPU, and evidence that requests were distributed across replicas.
+
+_To be completed by Claude Code._
+
+## Routing behavior
+
+_To be completed by Claude Code._
+
+## Tests executed
+
+_To be completed by Claude Code._
+
+## Known limitations
+
+_To be completed by Claude Code._
+
+## Security review
+
+Confirm at minimum:
+
+- no credentials/secrets were added,
+- raw image data is not logged,
+- prompts/responses are not logged by default,
+- arbitrary remote URL fetching was not added,
+- upload size/type/pixel limits are enforced,
+- user generation settings cannot exceed server limits,
+- errors do not expose stack traces/internal paths.
+
+_To be completed by Claude Code._
+
+## Recommended Stage 2 work
+
+Expected direction only; do not implement yet:
+
+```text
+Transformers replicas
+  -> vLLM replicas
+  -> continuous batching inside each replica
+  -> async serving/streaming
+  -> richer load-aware routing
+  -> throughput, TTFT, p95/p99 benchmarking
 ```
-Client -> POST /v1/generate (multipart: JSON "request" field + image files)
-  -> src/api/routes/inference.py            (parsing only; bounded image read)
-  -> src/inference/service.py InferenceService.generate()  (via asyncio.to_thread)
-       -> src/inference/preprocessing.py     (validation + limits + Qwen message building)
-       -> InferenceEngine.generate()         (interface; sync)
-            -> src/inference/engines/transformers.py TransformersQwenVLEngine
-                 -> processor.apply_chat_template -> model.generate() -> decode
-       -> src/inference/postprocessing.py    (text normalization)
-  -> GenerateResponseSchema -> HTTP response
-```
 
-- `InferenceEngine` (`src/inference/engines/base.py`) is a small sync interface
-  (`generate`/`health`); `FakeInferenceEngine` fully replaces it in service/API tests with zero
-  Transformers/torch imports. A future vLLM engine implements the same interface.
-- `InferenceRequest`/`InferenceResponse`/`GenerationConfig`/`ImageInput` (`src/inference/schema.py`)
-  are the model-agnostic domain objects `InferenceService` and engines exchange.
-- Config, request-parsing/validation, engine execution, and text postprocessing are in separate
-  modules per `claude.md`'s dependency diagram; route handlers contain no Qwen/tokenizer/generation
-  code (verified by tests exercising the API purely through `FakeInferenceEngine`).
-- `src/pipeline/serve.py` is the only place that wires a real `TransformersQwenVLEngine` into
-  `create_app()` and calls `uvicorn.run()`.
-
-### Tests executed
-
-Environment: `module load Anaconda3/2022.10` + `conda activate llm` (existing project env; `pytest`
-was additionally `pip install`ed into it with user approval).
-
-```
-python -m pytest test/inference test/api -v
-```
-Result: **60 passed, 1 skipped** (the GPU smoke test, which skips itself because no exported model
-exists at `results/final` yet -- see Known limitations).
-
-Existing training/eval test files (`test/test_data_pipeline.py`, `test/test_fsdp.py`,
-`test/test_qwen_vl.py`) were `--collect-only`'d to confirm the `ConfigurationManager` signature
-change doesn't break their imports (7 tests collected cleanly). They were not executed end-to-end
-here: they download the real 8B model and/or require GPU + `torch.distributed`, and are documented
-in their own docstrings as compute-node-only, matching this session's HPC constraints (no GPU work
-on the shared login node).
-
-### End-to-end verification
-
-Everything reachable without a GPU or the exported model was verified via automated tests
-(config loading/validation, schema, preprocessing's full required-case matrix, fake/mocked engine
-behavior, `InferenceService` orchestration and exceptions, request-ID propagation, structured
-logging content, and the full FastAPI app via `TestClient` + `FakeInferenceEngine` for both health
-endpoints and `/v1/generate` including every error-status mapping).
-
-Not executed in this session (see Known limitations): starting `src/pipeline/serve.py` as a live
-process, a real image+prompt request against the real exported Qwen-VL model, and GPU
-latency/memory measurements.
-
-### Known limitations
-
-- **No GPU smoke test run.** `results/final` (the exported HF artifact) doesn't exist yet in this
-  environment, and the shared login node this session ran on cannot do GPU work per HPC policy.
-  `test/inference/test_transformers_engine_gpu.py` is written and skips cleanly when the model is
-  missing; run it on a compute node once an export exists:
-  `python -m pytest test/inference/test_transformers_engine_gpu.py -v -s`. Likewise,
-  `python -m src.pipeline.serve --config configs/inference.yaml` plus a real multipart request was
-  not attempted here.
-- **No lint/type-checking tooling exists in this repo** (no ruff/mypy/flake8 config found) --
-  "run lint/type/static checks" in Task 12 reduces to the test suite itself for now.
-- Only `max_new_tokens` has an explicit configured ceiling (`limits.max_new_tokens`). `num_beams`,
-  `do_sample`, and `temperature` are type/range-validated but not separately capped by a limits
-  field; a request could still ask for a large `num_beams` within Stage 1. Worth a `max_num_beams`
-  limit if beam search cost becomes a concern.
-- No request timeout is enforced around `model.generate()`; a pathological request (e.g. large
-  `max_new_tokens` with beam search) can hold the engine for a while. Stage 1 explicitly excludes a
-  scheduler/timeout policy (that's Stage 3 scope), but it's worth flagging here.
-- `TransformersQwenVLEngine` processes exactly one request per `generate()` call (no batching), per
-  Stage 1 scope.
-
-### Security review
-
-- No credentials/secrets were added (confirmed by review of all new files).
-- Raw image bytes are never logged (checked in `test/inference/test_service.py`'s logging tests and
-  by code review of `middleware/logging.py`, `service.py`, `error_handler.py`).
-- Prompts/responses are not logged by default (same tests; logs only carry request ID, model
-  version, success/failure, latency, and token counts).
-- No arbitrary remote URL fetching was added; images only arrive as uploaded multipart file parts.
-- Upload size/type/pixel limits are enforced pre-model, at two layers: a bounded streaming read in
-  the route (`_read_bounded`, aborts mid-upload past `limits.max_image_bytes`) and full
-  format/dimension validation in `preprocessing.py` (`test_preprocessing.py`,
-  `test_generate.py::test_generate_oversized_image_returns_413` /
-  `test_generate_unsupported_image_type_returns_415`).
-- User generation settings cannot exceed server limits: `max_new_tokens` is clamped/rejected against
-  `limits.max_new_tokens`; unknown override keys are rejected outright
-  (`test_generate_excessive_max_new_tokens_returns_400`,
-  `test_unknown_generation_override_key_is_rejected`).
-- Errors do not expose stack traces or internal filesystem details: unexpected exceptions are
-  caught by a catch-all handler that logs full detail server-side (with request ID) but returns a
-  generic sanitized message to the client
-  (`test_generate_unexpected_engine_error_returns_500_without_stack_trace`).
-
-### Recommended Stage 2 work
-
-Do not implement it yet.
-
-- Run the deferred GPU smoke test and a live `serve.py` + real request once an exported model is
-  available, and record baseline latency/GPU memory as this stage's task intended.
-- Benchmark the Transformers engine's real throughput/latency before deciding whether/how urgently
-  a vLLM engine is needed.
-- Consider a `max_num_beams` (or similar) limit if beam search is expected to be used with
-  user-controlled `num_beams`.
-- Design streaming/continuous batching only after Stage 1 is reviewed and approved, per `claude.md`.
+_To be completed after Stage 1 review._

@@ -46,7 +46,7 @@ The inference implementation must remain clearly separated from training and eva
    - The API must reuse the initialized engine for all requests.
 
 7. **Keep the inference runtime replaceable**
-   - The API and service layers must not depend on `AutoModelForImageTextToText`.
+   - The API and service layers must not depend on `Qwen2_5_VLForConditionalGeneration`.
    - Define an engine interface.
    - Stage 1 uses a Transformers-backed engine for correctness.
    - A later stage may add vLLM or another production runtime without changing API contracts.
@@ -72,6 +72,12 @@ The inference implementation must remain clearly separated from training and eva
     - Use `torch.inference_mode()` for generation.
     - Do not create gradients.
     - Do not use FSDP for the initial inference implementation if the exported model fits on one GPU.
+
+11A. **Multi-GPU inference uses independent replicas**
+    - If the model fits on one GPU, use one serving process per GPU and one full model replica per process.
+    - Assign GPUs explicitly, preferably with `CUDA_VISIBLE_DEVICES`.
+    - Do not use `uvicorn --workers N` as the GPU replication strategy.
+    - Keep the public router process CPU-only and model-free.
 
 12. **Configuration-driven behavior**
     - Model path, dtype, attention backend, device, generation defaults, request limits, and server settings must come from configuration.
@@ -120,30 +126,27 @@ The intended dependency direction is:
 Client
   |
   v
-HTTP API
+Public HTTP API
   |
   v
-InferenceService
+Replica Router
   |
-  +--------------------+
-  |                    |
-  v                    v
-Validation        Pre/Post-processing
-  |
-  v
-InferenceEngine interface
-  |
-  +-----------------------------+
-  |                             |
-  v                             v
-Transformers engine          Future engine
-(Stage 1)                    (e.g. vLLM)
-  |
-  v
-Exported Qwen-VL Hugging Face model
-  |
-  v
-GPU
+  +----------------------+----------------------+
+  |                      |                      |
+  v                      v                      v
+Worker 0               Worker 1               Worker N
+  |                      |                      |
+  v                      v                      v
+InferenceService       InferenceService       InferenceService
+  |                      |                      |
+  v                      v                      v
+Transformers Engine    Transformers Engine    Transformers Engine
+  |                      |                      |
+  v                      v                      v
+Qwen replica           Qwen replica           Qwen replica
+  |                      |                      |
+  v                      v                      v
+GPU 0                  GPU 1                  GPU N
 ```
 
 A request should conceptually move through:
@@ -351,11 +354,30 @@ Prometheus/OpenTelemetry/Grafana integration belongs to a later stage.
 
 # Implementation Stages
 
-## Stage 1 — Correct End-to-End Inference Service
+## Stage 1 — Correct End-to-End Inference Service with Multi-GPU Replication
 
 ### Goal
 
-Build a clean, testable, non-streaming inference service that loads the exported Qwen-VL Hugging Face model once and exposes a validated HTTP generation endpoint.
+Build a clean, testable, non-streaming inference service that loads the exported Qwen-VL Hugging Face model as **one full replica per GPU** and routes requests across replicas.
+
+The target topology is:
+
+```text
+                         Public API
+                             |
+                             v
+                      Replica Router
+                             |
+          +------------------+------------------+
+          |                  |                  |
+          v                  v                  v
+      GPU Worker 0       GPU Worker 1       GPU Worker 2
+      Qwen replica       Qwen replica       Qwen replica
+          |                  |                  |
+        GPU 0              GPU 1              GPU 2
+```
+
+For a model that fits on one GPU, Stage 1 must prefer **replication** over model parallelism.
 
 ### Required outcome
 
@@ -363,43 +385,113 @@ At the end of Stage 1, the project should support:
 
 ```text
 exported Qwen-VL model
-  -> Transformers inference engine
-  -> InferenceService
-  -> FastAPI
+  -> one worker process per GPU
+  -> one full model replica per worker
+  -> worker health/status
+  -> replica router
+  -> public FastAPI API
   -> image + prompt request
+  -> healthy worker selection
   -> generated response
 ```
 
-with health endpoints, configuration, tests, and no training/evaluation regression.
+The same public API must work in single-GPU and multi-GPU replicated deployments.
+
+### GPU-serving rules
+
+1. **One process owns one GPU replica**
+   - Do not load multiple model replicas inside one Python process.
+   - Prefer process/container-level GPU isolation.
+   - A worker should normally see one GPU and use `cuda:0` internally.
+
+2. **Use explicit GPU assignment**
+   - Local/manual deployment should use `CUDA_VISIBLE_DEVICES`.
+   - Do not assume multiple processes using `device="cuda"` will distribute themselves.
+   - Do not use `device_map="auto"` for replica-based serving.
+
+3. **Do not use training parallelism for request routing**
+   - Do not use DDP, FSDP, or `torch.nn.DataParallel` as a load-balancing mechanism.
+   - Stage 1 uses independent model replicas.
+
+4. **Separate router and worker responsibilities**
+   - The public router must not load the Qwen model.
+   - A worker owns model execution but does not choose which worker receives traffic.
+   - Public API -> router -> worker client -> worker service is the intended direction.
+
+5. **Routing strategy**
+   - Implement round-robin first, or least-active-request routing if worker status makes it simple.
+   - Routing must exclude known unhealthy/unready workers.
+   - Do not implement token-aware scheduling or continuous batching in Stage 1.
+
+6. **Failure isolation**
+   - Failure of one GPU worker must not terminate the public router.
+   - The service should continue on remaining healthy replicas.
+   - Return a clear service-unavailable response if no workers are ready.
+
+### Stage 1A — Single-Worker Correctness
+
+Goal:
+
+```text
+exported HF model
+  -> one Transformers worker
+  -> one GPU
+  -> internal worker API
+  -> correct Qwen-VL generation
+```
+
+Implement and validate model loading once, processor loading once, multimodal preprocessing, generation, health/readiness, worker schemas, tests, and safe request limits.
+
+### Stage 1B — Multi-GPU Replica Routing
+
+Goal:
+
+```text
+public API
+  -> replica router
+  -> N GPU worker processes
+  -> one model replica per GPU
+```
+
+Implement and validate worker registry/configuration, one worker endpoint per GPU process, basic load balancing, worker health tracking, request forwarding, failure handling, launch instructions, fake-worker integration tests, and a real multi-GPU smoke test when hardware is available.
+
+Stage 1 is not complete until both Stage 1A and Stage 1B are complete.
 
 ### Stage 1 boundaries
 
 Do implement:
 
 - canonical inference schemas,
+- worker-facing request/response schemas,
 - inference engine abstraction,
 - Transformers Qwen-VL engine,
 - multimodal preprocessing,
 - postprocessing,
-- inference service,
-- FastAPI application,
-- liveness/readiness endpoints,
-- non-streaming generation endpoint,
+- worker inference service,
+- public router/service,
+- public and worker FastAPI applications,
+- liveness/readiness/status endpoints,
+- non-streaming generation,
 - request validation and initial safety limits,
+- one-model-replica-per-GPU process model,
+- worker registry,
+- basic routing,
 - configuration,
-- service startup/shutdown lifecycle,
-- unit/API tests,
-- optional GPU smoke test,
-- `pipeline/serve.py`.
+- startup/shutdown lifecycle,
+- unit/API/integration tests,
+- optional real-GPU smoke tests,
+- launch entrypoints/scripts for router and workers.
 
 Do not implement yet:
 
 - vLLM,
 - continuous/in-flight batching,
-- custom request scheduler,
+- token-aware scheduling,
 - streaming tokens,
 - WebSocket/SSE,
 - tensor parallelism,
+- FSDP inference,
+- quantized serving,
 - autoscaling,
 - Kubernetes manifests,
 - Prometheus/Grafana,

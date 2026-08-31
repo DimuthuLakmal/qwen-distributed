@@ -50,8 +50,8 @@ def validate_and_build_request(
     the model/GPU.
     """
 
-    _validate_prompt(prompt, limits)
-    _validate_image_count(raw_images, limits)
+    validate_prompt(prompt, limits)
+    validate_image_count(len(raw_images), limits)
 
     images = [_decode_and_validate_image(raw_image, limits) for raw_image in raw_images]
     generation = _build_generation_config(generation_overrides, limits, defaults)
@@ -105,7 +105,12 @@ def build_conversation_messages(request: InferenceRequest) -> list[dict[str, Any
     return messages
 
 
-def _validate_prompt(prompt: str | None, limits: InferenceLimitsConfig) -> None:
+def validate_prompt(prompt: str | None, limits: InferenceLimitsConfig) -> None:
+    """
+    Public so the router can apply the same prompt-length rule at the HTTP
+    edge, before forwarding to a worker (see `src/inference/router/routes/inference.py`).
+    """
+
     if prompt is None or not prompt.strip():
         raise InvalidRequestError("prompt must be a non-empty string.")
 
@@ -116,10 +121,15 @@ def _validate_prompt(prompt: str | None, limits: InferenceLimitsConfig) -> None:
         )
 
 
-def _validate_image_count(raw_images: list[RawImage], limits: InferenceLimitsConfig) -> None:
-    if len(raw_images) > limits.max_images:
+def validate_image_count(count: int, limits: InferenceLimitsConfig) -> None:
+    """
+    Public so the router can reject an oversized image count at the HTTP
+    edge, before forwarding to a worker (see `src/inference/router/routes/inference.py`).
+    """
+
+    if count > limits.max_images:
         raise InvalidRequestError(
-            f"received {len(raw_images)} images, which exceeds the "
+            f"received {count} images, which exceeds the "
             f"configured limit of {limits.max_images}."
         )
 

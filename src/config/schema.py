@@ -191,3 +191,17 @@ class InferenceLimitsConfig:
     max_image_bytes: int = 8_000_000
     max_image_pixels: int = 20_000_000
     max_new_tokens: int = 512
+
+
+@dataclass
+class WorkerEndpointConfig:
+    worker_id: str
+    url: str
+
+
+@dataclass
+class RoutingConfig:
+    strategy: str = "round_robin"
+    connect_timeout_seconds: float = 2.0
+    read_timeout_seconds: float = 30.0
+    status_poll_timeout_seconds: float = 2.0

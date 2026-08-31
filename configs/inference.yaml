@@ -27,3 +27,15 @@ limits:
   # Hard ceiling. Request-level max_new_tokens is clamped to this and can
   # never exceed it.
   max_new_tokens: 512
+
+# Read by the public router only; each worker process ignores this section.
+workers:
+  - id: "gpu-0"
+    url: "http://127.0.0.1:8100"
+
+# Read by the public router only; each worker process ignores this section.
+routing:
+  strategy: "round_robin"
+  connect_timeout_seconds: 2.0
+  read_timeout_seconds: 30.0
+  status_poll_timeout_seconds: 2.0
